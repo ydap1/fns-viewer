@@ -26,7 +26,6 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 XML = HERE / "data.xml"
-CSV = HERE / "structure-20140602.csv"
 DB = HERE / "tax_viewer_index.sqlite3"
 START_TAG = re.compile(rb"<tp\s+([^>]*?)>")
 ATTRIBUTE = re.compile(rb'''([:\w.-]+)\s*=\s*(["'])(.*?)\2''', re.DOTALL)
@@ -182,13 +181,6 @@ def fetch_record(offset: int) -> ET.Element:
             end = joined.find(b"</tp>")
             if end != -1:
                 return ET.fromstring(joined[:end + 5])
-
-
-def schema() -> list[list[str]]:
-    try:
-        return [line.split(";") for line in CSV.read_text(encoding="cp1251").splitlines()]
-    except FileNotFoundError:
-        return []
 
 
 def make_xlsx(records: list[tuple[str, ET.Element]], payer: str = '') -> bytes:
