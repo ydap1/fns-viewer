@@ -584,3 +584,4 @@ table { border-collapse: collapse; width: 100%; background: var(--surface); }
   .tabs { width: 100%; margin: 6px 0 0; }
   .colophon-inner { flex-direction: column; gap: 6px; }
 }
+.swatch-rest { background: var(--ink-3); opacity: .45; }

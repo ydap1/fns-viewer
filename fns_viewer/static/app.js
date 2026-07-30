@@ -824,8 +824,30 @@ function chartModel() {
   };
 }
 
+// Eight is where a categorical palette stops working, and cycling it just
+// produces eleven regions sharing a blue. Past that the largest eight keep
+// their colour and a name; the rest stay in as recessive context so "все
+// регионы" still means all of them.
+const NAMED = 8;
+
+function rankSeries(series) {
+  const last = s => {
+    for (let i = s.values.length - 1; i >= 0; i--) {
+      if (s.values[i] !== null && isFinite(s.values[i])) return s.values[i];
+    }
+    return -Infinity;
+  };
+  const order = series.map((s, i) => ({ s, i, key: last(s) }))
+    .sort((a, b) => b.key - a.key);
+  const named = new Set(order.slice(0, NAMED).map(x => x.i));
+  return series.map((s, i) => ({ ...s, named: named.has(i),
+                                 colour: named.has(i)
+                                   ? seriesColour(order.findIndex(x => x.i === i)) : null }));
+}
+
 function drawChart() {
   const model = chartModel();
+  model.series = rankSeries(model.series);
   const flat = model.series.flatMap(s => s.values).filter(v => v !== null && isFinite(v));
   if (!flat.length) {
     return `<div class="state"><h3>Нет данных</h3>
@@ -857,7 +879,8 @@ function drawChart() {
      >${esc(label.length > 22 ? label.slice(0, 21) + '…' : label)}</text>`).join('');
 
   const marks = model.series.map((s, si) => {
-    const colour = seriesColour(si);
+    const colour = s.colour || 'var(--ink-3)';
+    const context = !s.named;
     if (statsState.type === 'bar') {
       const width = Math.max(2, (step / model.series.length) * 0.7);
       return s.values.map((v, i) => v === null || !isFinite(v) ? '' : `<rect
@@ -873,16 +896,20 @@ function drawChart() {
       return acc + (prev ? ` L${p[0].toFixed(1)} ${p[1].toFixed(1)}`
                          : ` M${p[0].toFixed(1)} ${p[1].toFixed(1)}`);
     }, '');
-    const dots = points.map((p, i) => !p ? '' :
+    const dots = context ? '' : points.map((p, i) => !p ? '' :
       `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${statsState.type === 'dot' ? 5 : 4}"
         fill="${colour}" stroke="var(--surface)" stroke-width="2"><title>${esc(s.name)} · ${esc(model.labels[i])}: ${esc(fmt(s.values[i]))}</title></circle>`).join('');
-    return (statsState.type === 'line'
-      ? `<path d="${path}" fill="none" stroke="${colour}" stroke-width="2"
-           stroke-linejoin="round" stroke-linecap="round"/>` : '') + dots;
+    return (statsState.type === 'line' || context
+      ? `<path d="${path}" fill="none" stroke="${colour}" stroke-width="${context ? 1 : 2}"
+           ${context ? 'opacity=".35"' : ''}
+           stroke-linejoin="round" stroke-linecap="round"><title>${esc(s.name)}</title></path>` : '') + dots;
   }).join('');
 
-  const legend = model.series.length > 1 ? `<ul class="legend">${model.series.map((s, i) =>
-    `<li><span class="swatch" style="background:${seriesColour(i)}"></span>${esc(s.name)}</li>`).join('')}</ul>` : '';
+  const rest = model.series.length - model.series.filter(s => s.named).length;
+  const legend = model.series.length > 1 ? `<ul class="legend">${
+    model.series.filter(s => s.named)
+      .map(s => `<li><span class="swatch" style="background:${s.colour}"></span>${esc(s.name)}</li>`).join('')
+    }${rest ? `<li><span class="swatch swatch-rest"></span>Остальные ${count(rest)} — серым</li>` : ''}</ul>` : '';
 
   const caption = statsState.expr
     ? `Формула ${esc(statsState.expr)}`
