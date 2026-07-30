@@ -320,9 +320,84 @@ def parse_sheet(rows: list[dict[str, str]], name: str) -> tuple[list[tuple[str, 
     return indicators, values
 
 
+def parse_single_region(rows: list[dict[str, str]]) -> list[tuple[int, str, str, float | None]]:
+    """Read a one-region workbook, where indicators run down the page.
+
+    The federal archives put subjects in rows and indicators in columns; the
+    УФНС files for 2009-2011 do the opposite — «Показатели | Код строки |
+    Значение показателя», with each Раздел introduced by its own heading.
+    """
+    out: list[tuple[int, str, str, float | None]] = []
+    section = None
+    pending: list[str] = []
+    for cells in rows:
+        first = " ".join(str(cells.get("A", "")).split())
+        heading = re.search(r"Раздел\s+([IΙ]{1,3})\b", first, re.I)
+        if heading:
+            section = ROMAN.get(heading.group(1).translate(IOTA).upper())
+            pending = []
+            continue
+        code = str(cells.get("B", "")).strip()
+        if not re.fullmatch(r"\d{3,4}", code):
+            # Text with no code of its own is a sub-heading for the rows below,
+            # except the table's own column headings.
+            if first and len(first) > 3 and not TABLE_HEADING.match(first):
+                pending = [first]
+            continue
+        if section is None:
+            continue
+        label = " · ".join([*pending, first]) if first else " · ".join(pending)
+        out.append((section, code, label or code, _number(cells.get("C"))))
+        pending = []
+    return out
+
+
+TABLE_HEADING = re.compile(r"^(показател|код строки|значение показател|наименование)", re.I)
+REGIONAL_URL = "https://www.nalog.gov.ru/rn{code}/related_activities/statistics_and_analytics/forms/"
+
+
+def regional_sources(codes, forms, years, progress=print) -> dict:
+    """Crawl every regional page for the years the federal section lacks."""
+    found: dict[str, dict[str, dict[int, str]]] = {}
+    for position, code in enumerate(codes, 1):
+        url = REGIONAL_URL.format(code=code)
+        try:
+            time.sleep(POLITE_DELAY)
+            page = _fetch(url, timeout=60).decode("utf-8", "replace")
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            progress(f"  rn{code}: страница недоступна ({error})")
+            continue
+        marks = [m.start() for m in re.finditer("Отчеты, сформированные УФНС", page)]
+        if not marks:
+            continue
+        regional = page[marks[-1]:]
+        per_form: dict[str, dict[int, str]] = {}
+        for form in forms:
+            row = form_row(regional, form)
+            if row is None:
+                continue
+            links = {}
+            for href, year in re.findall(r'href="([^"]+)"[^>]*>\s*(\d{4})\s*[;.]?\s*<', row):
+                if int(year) in years:
+                    links.setdefault(int(year), urllib.parse.urljoin(url, href))
+            if links:
+                per_form[form] = links
+        if per_form:
+            found[code] = per_form
+        if position % 15 == 0:
+            progress(f"  просмотрено регионов: {position}/{len(codes)}")
+    return found
+
+
 # ---------------------------------------------------------------- downloading
 
 def _fetch(url: str, timeout: int = 120) -> bytes:
+    # Some published paths contain raw spaces and Cyrillic, which urllib rejects
+    # outright ("URL can't contain control characters"), so escape the path.
+    split = urllib.parse.urlsplit(url)
+    url = urllib.parse.urlunsplit(split._replace(
+        path=urllib.parse.quote(split.path, safe="/%"),
+        query=urllib.parse.quote(split.query, safe="=&%")))
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
@@ -537,6 +612,67 @@ def update(years: list[int] | None = None, forms: list[str] | None = None, progr
     if unmatched:
         progress(f"Не сопоставлено с регионами: {', '.join(sorted(unmatched)[:8])}")
     return stored
+
+
+def update_early(years=(2009, 2010, 2011), progress=print) -> int:
+    """Add the years the federal section never published, from the УФНС pages.
+
+    One file per region per form per year — about seven hundred downloads —
+    because before 2012 nothing was published as a single per-subject archive.
+    """
+    import sqlite3  # noqa: PLC0415 - only the refresh path touches the index
+
+    from . import store  # local import: statistics can be imported without an index
+    from .config import DB
+
+    try:
+        with store.connect(readonly=True) as index:
+            codes = sorted({m.group(1) for row in index.execute("SELECT value FROM list_values")
+                            if (m := re.match(r"^(\d\d)\s*-", row[0]))})
+    except sqlite3.Error:
+        raise SystemExit(f"Нужен индекс {DB}: он даёт список регионов.") from None
+
+    progress(f"Обход {len(codes)} региональных страниц за годы {sorted(years)}…")
+    sources = regional_sources(codes, list(FORMS), set(years), progress)
+    total_files = sum(len(y) for form in sources.values() for y in form.values())
+    progress(f"Регионов с данными: {len(sources)}, файлов к загрузке: {total_files}")
+
+    all_values: list[tuple] = []
+    labels: dict[tuple[str, int, str], str] = {}
+    done = failed = 0
+    for code, per_form in sorted(sources.items()):
+        for form, per_year in per_form.items():
+            for year, url in sorted(per_year.items()):
+                try:
+                    time.sleep(POLITE_DELAY)
+                    # A third of these links are dead; a long timeout turns that
+                    # into hours of waiting, while a live file answers in under
+                    # a second.
+                    blob = _fetch(url, timeout=15)
+                    sheets = sheets_of(blob)
+                except Exception as error:  # noqa: BLE001 - one bad file of many
+                    failed += 1
+                    if failed <= 12:
+                        progress(f"  rn{code} {form} {year}: {str(error)[:70]}")
+                    continue
+                rows = [item for sheet in sheets for item in parse_single_region(sheet)]
+                if not rows:
+                    failed += 1
+                    continue
+                for section, indicator, label, amount in rows:
+                    labels.setdefault((form, section, indicator), label)
+                    all_values.append((form, year, section, code, indicator,
+                                       "" if amount is None else
+                                       int(amount) if float(amount).is_integer() else amount))
+                done += 1
+        progress(f"  rn{code}: готово ({done} файлов разобрано, {failed} пропущено)")
+
+    if not all_values:
+        progress("Ничего не загружено — файлы оставлены без изменений.")
+        return 0
+    merge_and_save(all_values, labels, {}, progress)
+    progress(f"Файлов разобрано {done}, пропущено {failed}")
+    return len(all_values)
 
 
 def merge_and_save(values, labels, titles, progress=print) -> None:
