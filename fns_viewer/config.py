@@ -18,6 +18,30 @@ STATIC = PACKAGE / "static"
 PAGE_SIZE = 50
 EXPORT_LIMIT = 1000
 
+
+def revision() -> str:
+    """Short commit of this checkout, or '' if it is not a clone.
+
+    Updates arrive by `git pull`, so "which version am I looking at" is a
+    question users and bug reports need answered. Read from .git directly
+    rather than shelling out: git need not be on PATH for this to work.
+    """
+    git = ROOT / '.git'
+    try:
+        head = (git / 'HEAD').read_text().strip()
+        if not head.startswith('ref: '):
+            return head[:7]
+        name = head[5:]
+        ref = git / name
+        if ref.exists():
+            return ref.read_text().strip()[:7]
+        for line in (git / 'packed-refs').read_text().splitlines():
+            if line.endswith(' ' + name):
+                return line.split()[0][:7]
+    except OSError:
+        pass
+    return ''
+
 FIELD_LABELS = {
     'ID': 'Идентификатор', 'Region_ID': 'Номер региона', 'TaxOrganCode': 'Код налогового органа',
     'Okato_ID': 'Номер ОКАТО', 'Oktmo_ID': 'Номер ОКТМО', 'Oktmo': 'Номер ОКТМО',

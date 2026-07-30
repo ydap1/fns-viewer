@@ -107,6 +107,7 @@ a:hover { text-decoration-color: currentColor; }
 .brand-text { display: flex; flex-direction: column; }
 .brand-text b { font-size: 15px; font-weight: 600; }
 .brand-text small { color: var(--ink-3); font-size: 12.5px; }
+.brand-text code { font: 12px/1 var(--mono); }
 
 /* ---------- filters ---------- */
 

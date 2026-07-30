@@ -511,8 +511,8 @@ window.addEventListener('hashchange', router);
       form.tax.add(new Option(name, id));
     }
     for (const period of options.periods) form.period.add(new Option(period, period));
-    el('corpus').textContent =
-      `${plural(options.total, RECORDS_WORD)} · локально, только чтение`;
+    el('corpus').innerHTML = `${esc(plural(options.total, RECORDS_WORD))} · только чтение`
+      + (options.revision ? ` · версия <code>${esc(options.revision)}</code>` : '');
   } catch (error) {
     el('summary').textContent = 'Не удалось загрузить справочники: ' + error.message;
   }

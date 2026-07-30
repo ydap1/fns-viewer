@@ -12,7 +12,7 @@ import re
 import sqlite3
 import time
 
-from .config import DB, PAGE_SIZE, SORT_COLUMNS, TAX_LIST_IDS, XML
+from .config import DB, PAGE_SIZE, SORT_COLUMNS, TAX_LIST_IDS, XML, revision
 from .xmlsource import START_TAG, attrs, source_stamp
 
 SCHEMA = """
@@ -202,4 +202,5 @@ def options(con: sqlite3.Connection) -> dict:
     return {'regions': sorted(regions, key=lambda item: item[1]),
             'taxes': taxes,
             'periods': periods,
-            'total': int(total[0]) if total else 0}
+            'total': int(total[0]) if total else 0,
+            'revision': revision()}
