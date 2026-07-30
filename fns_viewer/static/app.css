@@ -585,3 +585,35 @@ table { border-collapse: collapse; width: 100%; background: var(--surface); }
   .colophon-inner { flex-direction: column; gap: 6px; }
 }
 .swatch-rest { background: var(--ink-3); opacity: .45; }
+
+/* ---------- chart interaction ---------- */
+
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.chart-hint { margin: 10px 0 0; font-size: 12.5px; color: var(--ink-3); }
+.plot { position: relative; }
+.chart svg { cursor: crosshair; touch-action: none; }
+.chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Transparent catcher so the pointer never has to find a 2px line. */
+.chart .surface { fill: transparent; }
+.chart .crosshair line { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .crosshair circle { stroke: var(--surface); stroke-width: 2; }
+.chart .brush { fill: var(--accent); opacity: .12; }
+
+.tip {
+  position: absolute; top: 8px; z-index: 5; pointer-events: none;
+  min-width: 150px; max-width: 300px;
+  background: var(--surface); border: 1px solid var(--rule-strong);
+  border-radius: var(--r); box-shadow: var(--shadow);
+  padding: 9px 11px; font-size: 13px;
+}
+.tip > b { display: block; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+/* Value leads, name follows: the reader already knows the series. */
+.tip-row { display: grid; grid-template-columns: 10px auto 1fr; align-items: baseline; gap: 8px; margin-top: 3px; }
+.tip-row i { height: 2px; border-radius: 1px; align-self: center; }
+.tip-row b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tip-row span { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tip-more { margin-top: 5px; color: var(--ink-3); font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) { .chart svg { transition: none; } }
+.swatch-line { width: 16px; height: 2px; border-radius: 1px; }

@@ -711,7 +711,7 @@ const X_AXES = [['year', 'Год'], ['region', 'Регион']];
 let cat = null;                       // the indicator catalogue
 let picks = [];                       // chosen indicator slots
 let statsState = { regions: ['43'], mode: 'one', type: 'line', xAxis: 'year',
-                   year: null, expr: '', table: false };
+                   year: null, expr: '', table: false, zoom: null };
 let seriesData = null;
 
 const seriesColour = i => (matchMedia('(prefers-color-scheme: dark)').matches
@@ -811,16 +811,27 @@ function chartModel() {
   // Two orientations of the same matrix: years across the bottom with one
   // series per region, or regions across the bottom for a single year.
   if (statsState.xAxis === 'year') {
-    return {
+    return zoomed({
       labels: seriesData.years.map(String),
       series: seriesData.rows.map(row => ({ name: row.name, values: row.values })),
-    };
+    });
   }
   const year = statsState.year ?? seriesData.years[seriesData.years.length - 1];
   const at = seriesData.years.indexOf(Number(year));
-  return {
+  return zoomed({
     labels: seriesData.rows.map(row => row.name.replace(/^\d\d\s*-\s*/, '')),
     series: [{ name: `${year} год`, values: seriesData.rows.map(row => row.values[at] ?? null) }],
+  });
+}
+
+// Zooming is a slice of the x axis, so it belongs to the model, not the render.
+function zoomed(model) {
+  const range = statsState.zoom;
+  if (!range) return model;
+  const [from, to] = range;
+  return {
+    labels: model.labels.slice(from, to + 1),
+    series: model.series.map(s => ({ ...s, values: s.values.slice(from, to + 1) })),
   };
 }
 
@@ -905,27 +916,50 @@ function drawChart() {
            stroke-linejoin="round" stroke-linecap="round"><title>${esc(s.name)}</title></path>` : '') + dots;
   }).join('');
 
+  // The legend mirrors the mark it stands for: a stroke for lines, a block for bars.
+  const key = statsState.type === 'bar' ? 'swatch' : 'swatch swatch-line';
   const rest = model.series.length - model.series.filter(s => s.named).length;
   const legend = model.series.length > 1 ? `<ul class="legend">${
     model.series.filter(s => s.named)
-      .map(s => `<li><span class="swatch" style="background:${s.colour}"></span>${esc(s.name)}</li>`).join('')
-    }${rest ? `<li><span class="swatch swatch-rest"></span>Остальные ${count(rest)} — серым</li>` : ''}</ul>` : '';
+      .map(s => `<li><span class="${key}" style="background:${s.colour}"></span>${esc(s.name)}</li>`).join('')
+    }${rest ? `<li><span class="${key} swatch-rest"></span>Остальные ${count(rest)} — серым</li>` : ''}</ul>` : '';
 
   const caption = statsState.expr
     ? `Формула ${esc(statsState.expr)}`
     : esc(picks.length ? (seriesData.picks[0] || {}).label || '' : '');
 
+  // Geometry the interaction layer needs; recomputing it there would be a
+  // second source of truth for where a point sits.
+  chartGeometry = { x, y, model, step, low, high };
+
   return `<figure class="chart">
-    <figcaption>${caption}</figcaption>
-    <svg viewBox="0 0 ${PLOT.w} ${PLOT.h}" role="img"
-         aria-label="График: ${esc(caption)}" preserveAspectRatio="xMidYMid meet">
-      ${grid}
-      <line class="axis" x1="${PLOT.l}" x2="${PLOT.w - PLOT.r}" y1="${y(low).toFixed(1)}" y2="${y(low).toFixed(1)}"/>
-      ${xLabels}${marks}
-    </svg>
+    <div class="chart-head">
+      <figcaption>${caption}</figcaption>
+      <button type="button" class="more" data-zoom-reset${statsState.zoom ? '' : ' hidden'}>Весь период</button>
+    </div>
+    <div class="plot">
+      <svg viewBox="0 0 ${PLOT.w} ${PLOT.h}" tabindex="0"
+           role="img" aria-label="График: ${esc(caption)}. Значения доступны кнопкой «Таблицей»."
+           preserveAspectRatio="none">
+        ${grid}
+        <line class="axis" x1="${PLOT.l}" x2="${PLOT.w - PLOT.r}" y1="${y(low).toFixed(1)}" y2="${y(low).toFixed(1)}"/>
+        ${xLabels}${marks}
+        <g class="crosshair" hidden>
+          <line y1="${PLOT.t}" y2="${PLOT.h - PLOT.b}"/>
+          <g class="crosshair-dots"></g>
+        </g>
+        <rect class="brush" hidden y="${PLOT.t}" height="${PLOT.h - PLOT.t - PLOT.b}"/>
+        <rect class="surface" x="${PLOT.l}" y="${PLOT.t}"
+              width="${PLOT.w - PLOT.l - PLOT.r}" height="${PLOT.h - PLOT.t - PLOT.b}"/>
+      </svg>
+      <div class="tip" hidden></div>
+    </div>
     ${legend}
+    <p class="chart-hint">Наведите курсор — значения по всем рядам. Протяните мышью по графику, чтобы приблизить период; стрелки ← → двигают курсор.</p>
   </figure>`;
 }
+
+let chartGeometry = null;
 
 function seriesTable() {
   const model = chartModel();
@@ -950,6 +984,7 @@ async function loadSeries() {
   const box = el('view-stats').querySelector('#chart-area');
   if (box) box.innerHTML = '<div class="state"><h3>Считаем…</h3></div>';
   try {
+      statsState.zoom = null;   // a new series has a different x axis
     seriesData = await api('/api/statistics/series?' + statsParams());
   } catch (error) {
     seriesData = null;
@@ -963,6 +998,7 @@ function renderChartArea() {
   const box = el('view-stats').querySelector('#chart-area');
   if (!box || !seriesData) return;
   box.innerHTML = drawChart() + (statsState.table ? seriesTable() : '');
+  attachChartInteraction();
 }
 
 function renderStats() {
@@ -1025,7 +1061,9 @@ el('view-stats').addEventListener('change', event => {
     return loadSeries();
   }
   if (target.matches('[data-type]')) { statsState.type = target.value; return renderChartArea(); }
-  if (target.matches('[data-xaxis]')) { statsState.xAxis = target.value; return renderStats(); }
+  if (target.matches('[data-xaxis]')) {
+    statsState.xAxis = target.value; statsState.zoom = null; return renderStats();
+  }
   if (target.matches('[data-year]')) { statsState.year = Number(target.value); return renderChartArea(); }
 });
 
@@ -1044,6 +1082,10 @@ el('view-stats').addEventListener('click', event => {
     if (statsState.mode === 'one') statsState.regions = statsState.regions.slice(0, 1);
     return renderStats();
   }
+  if (target.closest('[data-zoom-reset]')) {
+    statsState.zoom = null;
+    return renderChartArea();
+  }
   if (target.closest('[data-table]')) {
     statsState.table = !statsState.table;
     return renderStats();
@@ -1061,3 +1103,133 @@ el('view-stats').addEventListener('input', event => {
   clearTimeout(formulaTimer);
   formulaTimer = setTimeout(loadSeries, 400);
 });
+
+/* --- interaction: crosshair, readout, drag-to-zoom --- */
+
+function attachChartInteraction() {
+  const box = el('view-stats').querySelector('.plot');
+  if (!box || !chartGeometry) return;
+  const svg = box.querySelector('svg');
+  const tip = box.querySelector('.tip');
+  const cross = svg.querySelector('.crosshair');
+  const crossLine = cross.querySelector('line');
+  const crossDots = cross.querySelector('.crosshair-dots');
+  const brush = svg.querySelector('.brush');
+  const { x, y, model, step } = chartGeometry;
+  const bars = statsState.type === 'bar';
+  let current = -1;
+  let dragFrom = null;
+
+  const toPlotX = event => {
+    const rect = svg.getBoundingClientRect();
+    return ((event.clientX - rect.left) / rect.width) * PLOT.w;
+  };
+  const indexAt = plotX => {
+    if (!model.labels.length) return -1;
+    const raw = bars ? (plotX - PLOT.l) / step - 0.5 : (plotX - PLOT.l) / step;
+    return Math.max(0, Math.min(model.labels.length - 1, Math.round(raw)));
+  };
+
+  function show(index) {
+    if (index < 0 || index === current) return;
+    current = index;
+    const at = x(index);
+    crossLine.setAttribute('x1', at.toFixed(1));
+    crossLine.setAttribute('x2', at.toFixed(1));
+    crossDots.replaceChildren();
+    const present = [];
+    for (const s of model.series) {
+      const value = s.values[index];
+      if (value === null || !isFinite(value)) continue;
+      present.push(s);
+      if (!s.named) continue;
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', at.toFixed(1));
+      dot.setAttribute('cy', y(value).toFixed(1));
+      dot.setAttribute('r', '6');
+      dot.setAttribute('fill', s.colour);
+      crossDots.appendChild(dot);
+    }
+    cross.hidden = false;
+
+    // Labels come from the data, so they are inserted as text, never as markup.
+    tip.replaceChildren();
+    const head = document.createElement('b');
+    head.textContent = model.labels[index];
+    tip.appendChild(head);
+    const named = present.filter(s => s.named);
+    const listed = (named.length ? named : present).slice(0, 10);
+    for (const s of listed) {
+      const row = document.createElement('div');
+      row.className = 'tip-row';
+      const key = document.createElement('i');
+      key.style.background = s.colour || 'var(--ink-3)';
+      const value = document.createElement('b');
+      value.textContent = fmt(s.values[index]);
+      const name = document.createElement('span');
+      name.textContent = s.name;
+      row.append(key, value, name);
+      tip.appendChild(row);
+    }
+    if (present.length > listed.length) {
+      const more = document.createElement('div');
+      more.className = 'tip-more';
+      more.textContent = `и ещё ${count(present.length - listed.length)}`;
+      tip.appendChild(more);
+    }
+    tip.hidden = false;
+    const left = (at / PLOT.w) * box.clientWidth;
+    tip.style.left = `${Math.min(box.clientWidth - tip.offsetWidth - 8, Math.max(8, left + 14))}px`;
+  }
+
+  function hide() {
+    current = -1;
+    cross.hidden = true;
+    tip.hidden = true;
+  }
+
+  svg.addEventListener('pointermove', event => {
+    const plotX = toPlotX(event);
+    if (dragFrom !== null) {
+      const from = Math.min(dragFrom, plotX), to = Math.max(dragFrom, plotX);
+      brush.setAttribute('x', from.toFixed(1));
+      brush.setAttribute('width', Math.max(0, to - from).toFixed(1));
+      brush.hidden = false;
+    }
+    show(indexAt(plotX));
+  });
+  svg.addEventListener('pointerleave', () => { if (dragFrom === null) hide(); });
+
+  svg.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    dragFrom = toPlotX(event);
+    svg.setPointerCapture(event.pointerId);
+  });
+  svg.addEventListener('pointerup', event => {
+    if (dragFrom === null) return;
+    const to = toPlotX(event);
+    const wide = Math.abs(to - dragFrom) > 18;   // a click is not a zoom
+    const [a, b] = [indexAt(Math.min(dragFrom, to)), indexAt(Math.max(dragFrom, to))];
+    dragFrom = null;
+    brush.hidden = true;
+    if (wide && b > a) {
+      const base = statsState.zoom ? statsState.zoom[0] : 0;
+      statsState.zoom = [base + a, base + b];
+      renderChartArea();
+    }
+  });
+  svg.addEventListener('dblclick', () => {
+    if (!statsState.zoom) return;
+    statsState.zoom = null;
+    renderChartArea();
+  });
+
+  // Keyboard parity: the same readout without a pointer.
+  svg.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const next = current < 0 ? 0 : current + (event.key === 'ArrowRight' ? 1 : -1);
+    show(Math.max(0, Math.min(model.labels.length - 1, next)));
+  });
+  svg.addEventListener('blur', hide);
+}
