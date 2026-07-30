@@ -2,6 +2,24 @@
 chcp 65001 >nul
 set "PYTHONUTF8=1"
 cd /d "%~dp0"
+
+if "%VIEWER_SKIP_UPDATE%"=="1" goto after_update
+where git >nul 2>nul
+if errorlevel 1 goto after_update
+if not exist ".git" goto after_update
+for /f "delims=" %%i in ('git rev-parse HEAD 2^>nul') do set "REV_BEFORE=%%i"
+echo Checking for updates...
+git pull --ff-only
+if errorlevel 1 echo Update skipped, starting the version already on disk.
+for /f "delims=" %%i in ('git rev-parse HEAD 2^>nul') do set "REV_AFTER=%%i"
+if "%REV_BEFORE%"=="%REV_AFTER%" goto after_update
+rem This file may have just been replaced, and cmd.exe reads it by byte offset,
+rem so hand off to a fresh copy instead of continuing through stale lines.
+set "VIEWER_SKIP_UPDATE=1"
+cmd /c "%~f0"
+exit /b %errorlevel%
+
+:after_update
 if not exist "data.xml" (
   echo data.xml not found.
   pause
