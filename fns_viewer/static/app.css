@@ -407,6 +407,14 @@ table { border-collapse: collapse; width: 100%; background: var(--surface); }
   color: var(--ink-2); font-size: 14px;
 }
 
+.stat-title {
+  margin: 18px 0 8px; font-size: 14.5px; font-weight: 600; color: var(--ink-2);
+}
+.stat-title:first-of-type { margin-top: 10px; }
+/* The form's numbered totals stay legible once the breakdown rows are shown. */
+.data tbody tr.headline td { font-weight: 500; }
+.data tbody tr:not(.headline) td:first-child { padding-left: 30px; color: var(--ink-2); }
+
 .doc-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 22px 0 0; }
 
 /* ---------- responsive ---------- */

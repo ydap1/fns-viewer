@@ -230,8 +230,12 @@ async function openDoc(id) {
   payer = '';
   rateSort = 'object';
   benefitSort = 'category';
+  stats = null;
+  statsAll = false;
   renderDoc();
   window.scrollTo(0, 0);
+  await loadStats();      // the document renders first; figures fill in after
+  if (doc && doc.id === id) renderDoc();
 }
 
 function citation() {
@@ -391,9 +395,72 @@ function benefitsSection() {
     <tbody>${body}</tbody></table></div>`;
 }
 
+/* ---------- statistics (form 5-МН) ---------- */
+
+// The form is published per subject of the Federation, never per municipality,
+// so a municipal document is shown its region's totals and told as much.
+let stats = null;
+let statsAll = false;
+
+const STAT_SECTION_TAX = { 1: '2803', 2: '2803', 3: '2805' };
+
+function statsSection() {
+  if (!stats || !stats.available) return '';
+  if (!stats.sections || !stats.sections.length) {
+    return `<div class="section-head"><h2>Начисления по форме 5-МН</h2></div>
+      <p class="note">Для этого региона данных формы 5-МН нет.</p>`;
+  }
+  const municipal = tidy(doc.attributes.MunObraz);
+  const asked = tidy(doc.attributes.TaxPeriod);
+  const shown = String(stats.year);
+  const picker = stats.years.length > 1
+    ? `<label>Год <select data-stat-year>${optionTags(
+        stats.years.slice().reverse().map(y => [String(y), String(y)]), shown)}</select></label>`
+    : '';
+
+  const caveats = [];
+  if (municipal) caveats.push(`данные по региону <b>${esc(doc.region)}</b> целиком, а не по «${esc(municipal)}»`);
+  if (asked && asked !== shown) caveats.push(`ближайший доступный год — <b>${esc(shown)}</b>, документ за ${esc(asked)}`);
+
+  const tables = stats.sections.map(section => {
+    // The form's own numbered rows are the totals; the rest breaks them down
+    // into dozens of exemption codes that nobody reads at a glance.
+    const shown = statsAll ? section.items : section.items.filter(item => item.headline);
+    const rows = shown.map(item => `<tr${item.headline ? ' class="headline"' : ''}>
+      <td>${esc(item.label)}</td>
+      <td class="amount">${item.amount === null ? '<span class="muted">—</span>' : esc(fmt(item.amount))}</td>
+      <td class="ident">${esc(item.code)}</td></tr>`).join('');
+    return `<h3 class="stat-title">${esc(section.title)}</h3>
+      <div class="table-scroll"><table class="data">
+        <colgroup><col><col style="width:170px"><col style="width:80px"></colgroup>
+        <thead><tr><th>Показатель</th><th class="num">Значение, тыс. руб. / единиц</th><th>Код</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+  }).join('');
+  const total = stats.sections.reduce((n, s) => n + s.items.length, 0);
+  const toggle = `<button type="button" class="more" data-stat-all>${
+    statsAll ? 'Показать только итоговые строки'
+             : `Показать все показатели (${count(total)})`}</button>`;
+
+  return `<div class="section-head">
+      <h2>Начисления по форме 5-МН <span class="count">${esc(shown)}</span></h2>${picker}</div>
+    ${caveats.length ? `<p class="note">Показаны ${caveats.join('; ')}.</p>` : ''}
+    ${tables}${toggle}`;
+}
+
+async function loadStats() {
+  const code = /^(\d\d)\s*-/.exec(tidy(doc.region));
+  if (!code) { stats = null; return; }
+  try {
+    stats = await api('/api/statistics?' + new URLSearchParams(
+      { region: code[1], period: tidy(doc.attributes.TaxPeriod) }));
+  } catch {
+    stats = null;  // statistics are optional; the document still stands on its own
+  }
+}
+
 function renderDoc() {
   viewDoc.innerHTML = `<button type="button" class="back" data-back>← К результатам</button>`
-    + citation() + payerBar() + ratesSection() + benefitsSection()
+    + citation() + payerBar() + ratesSection() + benefitsSection() + statsSection()
     + `<div class="doc-actions">
         <button type="button" class="button button-primary" data-export-doc>Скачать документ в Excel</button>
         <button type="button" class="button" data-print>Распечатать</button>
@@ -469,15 +536,24 @@ viewDoc.addEventListener('click', event => {
   } else if (target.closest('.segment')) {
     payer = target.closest('.segment').dataset.payer;
     renderDoc();
+  } else if (target.closest('[data-stat-all]')) {
+    statsAll = !statsAll;
+    renderDoc();
   } else if (target.closest('.more')) {
     const box = target.closest('.clamp');
     const open = box.classList.toggle('open');
     target.closest('.more').textContent = open ? 'Свернуть' : 'Показать полностью';
   }
 });
-viewDoc.addEventListener('change', event => {
+viewDoc.addEventListener('change', async event => {
   if (event.target.matches('[data-rate-sort]')) { rateSort = event.target.value; renderDoc(); }
   if (event.target.matches('[data-benefit-sort]')) { benefitSort = event.target.value; renderDoc(); }
+  if (event.target.matches('[data-stat-year]')) {
+    const code = /^(\d\d)\s*-/.exec(tidy(doc.region));
+    stats = await api('/api/statistics?' + new URLSearchParams(
+      { region: code[1], period: event.target.value }));
+    renderDoc();
+  }
 });
 
 document.addEventListener('keydown', event => {
