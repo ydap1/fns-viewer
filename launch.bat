@@ -4,13 +4,37 @@ set "PYTHONUTF8=1"
 cd /d "%~dp0"
 
 if "%VIEWER_SKIP_UPDATE%"=="1" goto after_update
+
+rem Updates arrive by git pull, so a copy that cannot pull is stuck on whatever
+rem version it was made from. Say so instead of starting up as if all is well.
 where git >nul 2>nul
-if errorlevel 1 goto after_update
-if not exist ".git" goto after_update
+if errorlevel 1 (
+  echo.
+  echo [!] Git is not installed, so this copy cannot receive updates.
+  echo     Install Git from https://git-scm.com and run this file again.
+  echo.
+  pause
+  goto after_update
+)
+if not exist ".git" (
+  echo.
+  echo [!] This folder is not a Git clone, so it will never update.
+  echo     It was probably downloaded as a ZIP. Replace it with:
+  echo         git clone https://github.com/ydap1/fns-viewer.git
+  echo     then move data.xml into the new folder.
+  echo.
+  pause
+  goto after_update
+)
 for /f "delims=" %%i in ('git rev-parse HEAD 2^>nul') do set "REV_BEFORE=%%i"
 echo Checking for updates...
 git pull --ff-only
-if errorlevel 1 echo Update skipped, starting the version already on disk.
+if errorlevel 1 (
+  echo.
+  echo [!] Update failed - starting the version already on disk.
+  echo     Usually this means local edits or a diverged branch; `git status` says which.
+  echo.
+)
 for /f "delims=" %%i in ('git rev-parse HEAD 2^>nul') do set "REV_AFTER=%%i"
 if "%REV_BEFORE%"=="%REV_AFTER%" goto after_update
 rem This file may have just been replaced, and cmd.exe reads it by byte offset,
