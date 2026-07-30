@@ -1,4 +1,6 @@
 @echo off
+rem Saved as UTF-8 without BOM: chcp 65001 below makes cmd.exe read the Cyrillic
+rem in the messages correctly. A BOM would break the first line of the script.
 chcp 65001 >nul
 set "PYTHONUTF8=1"
 cd /d "%~dp0"
@@ -10,29 +12,30 @@ rem version it was made from. Say so instead of starting up as if all is well.
 where git >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo [!] Git is not installed, so this copy cannot receive updates.
-  echo     Install Git from https://git-scm.com and run this file again.
+  echo [!] Git не установлен, поэтому эта копия не будет обновляться.
+  echo     Установите Git с https://git-scm.com и запустите файл заново.
   echo.
   pause
   goto after_update
 )
 if not exist ".git" (
   echo.
-  echo [!] This folder is not a Git clone, so it will never update.
-  echo     It was probably downloaded as a ZIP. Replace it with:
+  echo [!] Эта папка не является клоном Git, обновления приходить не будут.
+  echo     Скорее всего, репозиторий скачали архивом. Замените папку на клон:
   echo         git clone https://github.com/ydap1/fns-viewer.git
-  echo     then move data.xml into the new folder.
+  echo     и перенесите в неё data.xml.
   echo.
   pause
   goto after_update
 )
 for /f "delims=" %%i in ('git rev-parse HEAD 2^>nul') do set "REV_BEFORE=%%i"
-echo Checking for updates...
+echo Проверка обновлений...
 git pull --ff-only
 if errorlevel 1 (
   echo.
-  echo [!] Update failed - starting the version already on disk.
-  echo     Usually this means local edits or a diverged branch; `git status` says which.
+  echo [!] Обновиться не удалось — запускается версия, которая уже на диске.
+  echo     Обычно причина в локальных правках или разошедшейся ветке,
+  echo     точную покажет команда git status.
   echo.
 )
 for /f "delims=" %%i in ('git rev-parse HEAD 2^>nul') do set "REV_AFTER=%%i"
@@ -45,7 +48,10 @@ exit /b %errorlevel%
 
 :after_update
 if not exist "data.xml" (
-  echo data.xml not found.
+  echo.
+  echo [!] Файл data.xml не найден в %CD%
+  echo     База в репозиторий не входит — положите её в эту папку.
+  echo.
   pause
   exit /b 1
 )
@@ -53,9 +59,11 @@ py -3 -c "import sys" >nul 2>nul
 if not errorlevel 1 goto py_launcher
 python -c "import sys" >nul 2>nul
 if not errorlevel 1 goto python_command
-echo Python 3 not found.
-echo Install 64-bit Python 3 from python.org, enable Add Python to PATH,
-echo then run this file again.
+echo.
+echo [!] Python 3 не найден.
+echo     Установите 64-разрядный Python 3 с https://python.org,
+echo     отметьте «Add Python to PATH» и запустите файл заново.
+echo.
 pause
 exit /b 1
 

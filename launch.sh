@@ -17,38 +17,38 @@ main() {
   esac
 
   if ! command -v git >/dev/null 2>&1; then
-    printf '\n[!] Git is not installed, so this copy cannot receive updates.\n'
+    printf '\n[!] Git не установлен, поэтому эта копия не будет обновляться.\n'
     case "$os" in
-      macos) printf '    Run: xcode-select --install\n' ;;
-      linux) printf '    Install git with your package manager, e.g. apt install git\n' ;;
-      *)     printf '    Install git from https://git-scm.com\n' ;;
+      macos) printf '    Выполните: xcode-select --install\n' ;;
+      linux) printf '    Установите git через пакетный менеджер, например: apt install git\n' ;;
+      *)     printf '    Установите git с https://git-scm.com\n' ;;
     esac
     printf '\n'
   elif [ ! -d .git ]; then
-    printf '\n[!] This folder is not a Git clone, so it will never update.\n'
-    printf '    Replace it with:\n'
+    printf '\n[!] Эта папка не является клоном Git, обновления приходить не будут.\n'
+    printf '    Замените папку на клон:\n'
     printf '        git clone https://github.com/ydap1/fns-viewer.git\n'
-    printf '    then move data.xml into the new folder.\n\n'
+    printf '    и перенесите в неё data.xml.\n\n'
   else
-    echo 'Checking for updates...'
+    echo 'Проверка обновлений...'
     if ! git pull --ff-only; then
-      printf '\n[!] Update failed - starting the version already on disk.\n'
-      printf '    Usually local edits or a diverged branch; `git status` says which.\n\n'
+      printf '\n[!] Обновиться не удалось — запускается версия, которая уже на диске.\n'
+      printf '    Обычно причина в локальных правках или разошедшейся ветке,\n    точную покажет команда git status.\n\n'
     fi
   fi
 
   if [ ! -f data.xml ]; then
-    printf '\n[!] data.xml not found in %s\n' "$PWD"
-    printf '    The database is not part of the repository; put it here first.\n\n'
+    printf '\n[!] Файл data.xml не найден в %s\n' "$PWD"
+    printf '    База в репозиторий не входит — положите её в эту папку.\n\n'
     exit 1
   fi
 
   python=$(command -v python3 || command -v python) || {
-    printf '\n[!] Python 3 not found.\n'
+    printf '\n[!] Python 3 не найден.\n'
     case "$os" in
-      macos) printf '    Install it from https://python.org or with: brew install python\n' ;;
-      linux) printf '    Install it with your package manager, e.g. apt install python3\n' ;;
-      *)     printf '    Install Python 3 and run this file again.\n' ;;
+      macos) printf '    Установите его с https://python.org или командой: brew install python\n' ;;
+      linux) printf '    Установите его через пакетный менеджер, например: apt install python3\n' ;;
+      *)     printf '    Установите Python 3 и запустите файл заново.\n' ;;
     esac
     printf '\n'
     exit 1
