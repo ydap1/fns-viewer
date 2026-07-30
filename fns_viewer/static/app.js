@@ -113,14 +113,24 @@ function toHash(next, { replace = false } = {}) {
 function router() {
   const path = location.hash.split('?')[0];
   const match = path.match(/^#\/doc\/(.+)$/);
+  const viewStats = el('view-stats');
+  const show = which => {
+    viewSearch.hidden = which !== 'search';
+    viewDoc.hidden = which !== 'doc';
+    viewStats.hidden = which !== 'stats';
+    for (const tab of document.querySelectorAll('[data-tab]')) {
+      tab.setAttribute('aria-current', String(tab.dataset.tab === (which === 'doc' ? 'search' : which)));
+    }
+  };
   if (match) {
-    viewSearch.hidden = true;
-    viewDoc.hidden = false;
+    show('doc');
     openDoc(decodeURIComponent(match[1]));
+  } else if (path === '#/stats') {
+    show('stats');
+    openStats();
   } else {
     if (viewDoc.hidden === false) viewDoc.innerHTML = '';
-    viewDoc.hidden = true;
-    viewSearch.hidden = false;
+    show('search');
     searchHash = location.hash || '#/';
     runSearch();
   }
@@ -427,17 +437,20 @@ let statsAll = false;
 
 function statsSection() {
   if (!stats || !stats.available) return '';
-  if (!stats.forms || !stats.forms.length) {
-    return docSection('sec-stats', 'Начисления по данным ФНС', '', '',
-      '<p class="note">Для этого региона статистики нет.</p>');
-  }
   const municipal = tidy(doc.attributes.MunObraz);
   const asked = tidy(doc.attributes.TaxPeriod);
-  const shown = String(stats.year);
-  const picker = stats.years.length > 1
+  const shown = String(stats.year ?? asked);
+  // Built before the empty case on purpose: a year with nothing in it is still
+  // a year to move off, so the picker has to stay put rather than vanish.
+  const picker = stats.years.length
     ? `<label>Год <select data-stat-year>${optionTags(
         stats.years.slice().reverse().map(y => [String(y), String(y)]), shown)}</select></label>`
     : '';
+  if (!stats.forms || !stats.forms.length) {
+    return docSection('sec-stats', 'Начисления по данным ФНС', esc(shown), picker,
+      `<p class="note">За ${esc(shown)} год по этому налогу данных нет.
+       ${stats.years.length ? 'Выберите другой год выше.' : ''}</p>`);
+  }
 
   const caveats = [];
   if (municipal) caveats.push(`данные по региону <b>${esc(doc.region)}</b> целиком, а не по «${esc(municipal)}»`);
@@ -675,10 +688,349 @@ window.addEventListener('hashchange', router);
       form.tax.add(new Option(name, id));
     }
     for (const period of options.periods) form.period.add(new Option(period, period));
-    el('corpus').innerHTML = `${esc(plural(options.total, RECORDS_WORD))} · только чтение`
+    el('corpus').innerHTML = esc(plural(options.total, RECORDS_WORD))
       + (options.revision ? ` · версия <code>${esc(options.revision)}</code>` : '');
   } catch (error) {
     el('summary').textContent = 'Не удалось загрузить справочники: ' + error.message;
   }
   router();
 })();
+
+/* ---------- analysis screen ---------- */
+
+/* Colours come from the data-viz reference palette, validated against both
+   surfaces: light passes every gate with a contrast WARN, which is why the
+   legend always carries text labels and a table view is one click away. */
+const SERIES_LIGHT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100',
+                      '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+const SERIES_DARK = ['#3987e5', '#d95926', '#199e70', '#c98500',
+                     '#d55181', '#008300', '#9085e9', '#e66767'];
+const CHART_TYPES = [['line', 'Линия'], ['bar', 'Столбцы'], ['dot', 'Точки']];
+const X_AXES = [['year', 'Год'], ['region', 'Регион']];
+
+let cat = null;                       // the indicator catalogue
+let picks = [];                       // chosen indicator slots
+let statsState = { regions: ['43'], mode: 'one', type: 'line', xAxis: 'year',
+                   year: null, expr: '', table: false };
+let seriesData = null;
+
+const seriesColour = i => (matchMedia('(prefers-color-scheme: dark)').matches
+  ? SERIES_DARK : SERIES_LIGHT)[i % 8];
+
+const slotName = i => String.fromCharCode(65 + i);
+
+function sectionsOf(form) {
+  return (cat.forms.find(f => f.form === form) || { sections: [] }).sections;
+}
+
+function pickRow(pick, index) {
+  const forms = cat.forms.map(f => [f.form, `${f.form} — ${f.name}`]);
+  const sections = sectionsOf(pick.form).map(s => [String(s.section), s.title]);
+  const chosen = sectionsOf(pick.form).find(s => String(s.section) === String(pick.section));
+  const indicators = (chosen ? chosen.indicators : [])
+    .map(i => [i.code, `${i.code} · ${i.label}`]);
+  return `<div class="pick" data-index="${index}">
+    <span class="slot">${slotName(index)}</span>
+    <select data-pick="form">${optionTags(forms, pick.form)}</select>
+    <select data-pick="section">${optionTags(sections, String(pick.section))}</select>
+    <select data-pick="code" class="pick-indicator">${optionTags(indicators, pick.code)}</select>
+    <button type="button" class="button button-quiet" data-drop="${index}"
+            aria-label="Убрать показатель ${slotName(index)}"${picks.length < 2 ? ' disabled' : ''}>×</button>
+  </div>`;
+}
+
+function statsControls() {
+  const regionOptions = cat.regions.map(([code, name]) => [code, name]);
+  const chosen = new Set(statsState.regions);
+  return `<div class="panel">
+    <div class="panel-head"><b>Показатели</b>
+      <button type="button" class="more" data-add-pick>Добавить показатель</button></div>
+    ${picks.map(pickRow).join('')}
+    <label class="field-inline">Формула
+      <input type="text" data-expr value="${esc(statsState.expr)}"
+             placeholder="например B / A — оставьте пустым, чтобы взять A как есть">
+      <small>Латинские буквы — обозначения выше, знаки + − * / и скобки</small>
+    </label>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><b>Регионы</b></div>
+    <div class="chips">
+      ${[['one', 'Один регион'], ['some', 'Несколько'], ['all', `Все ${cat.regions.length}`]]
+        .map(([value, label]) => `<button type="button" class="segment" data-mode="${value}"
+          aria-pressed="${statsState.mode === value}">${label}</button>`).join('')}
+    </div>
+    ${statsState.mode === 'all' ? '' : `<select data-regions ${statsState.mode === 'some' ? 'multiple size="8"' : ''}>
+      ${regionOptions.map(([v, n]) =>
+        `<option value="${esc(v)}"${chosen.has(v) ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+    </select>`}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><b>График</b></div>
+    <div class="control-row">
+      <label class="field-inline">Тип
+        <select data-type>${optionTags(CHART_TYPES, statsState.type)}</select></label>
+      <label class="field-inline">Ось X
+        <select data-xaxis>${optionTags(X_AXES, statsState.xAxis)}</select></label>
+      ${statsState.xAxis === 'region' ? `<label class="field-inline">Год
+        <select data-year>${optionTags(cat.years.map(y => [String(y), String(y)]),
+          String(statsState.year ?? cat.years[cat.years.length - 1]))}</select></label>` : ''}
+      <button type="button" class="button" data-table aria-pressed="${statsState.table}">Таблицей</button>
+      <button type="button" class="button button-primary" data-export-series>Скачать Excel</button>
+    </div>
+  </div>`;
+}
+
+/* --- the chart itself: plain SVG, because nothing may be fetched from a CDN --- */
+
+const PLOT = { w: 1000, h: 420, l: 84, r: 20, t: 18, b: 58 };
+
+function niceTicks(min, max, count = 5) {
+  if (!isFinite(min) || !isFinite(max)) return [0, 1];
+  if (min === max) { min -= 1; max += 1; }
+  const span = max - min;
+  const rough = span / count;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rough)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * magnitude).find(s => s >= rough) || magnitude * 10;
+  const first = Math.floor(min / step) * step;
+  const ticks = [];
+  for (let v = first; v <= max + step * 0.001; v += step) ticks.push(+v.toFixed(10));
+  return ticks;
+}
+
+const shortNumber = v => {
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return (v / 1e9).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млрд';
+  if (abs >= 1e6) return (v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млн';
+  if (abs >= 1e3) return (v / 1e3).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' тыс.';
+  return v.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+};
+
+function chartModel() {
+  // Two orientations of the same matrix: years across the bottom with one
+  // series per region, or regions across the bottom for a single year.
+  if (statsState.xAxis === 'year') {
+    return {
+      labels: seriesData.years.map(String),
+      series: seriesData.rows.map(row => ({ name: row.name, values: row.values })),
+    };
+  }
+  const year = statsState.year ?? seriesData.years[seriesData.years.length - 1];
+  const at = seriesData.years.indexOf(Number(year));
+  return {
+    labels: seriesData.rows.map(row => row.name.replace(/^\d\d\s*-\s*/, '')),
+    series: [{ name: `${year} год`, values: seriesData.rows.map(row => row.values[at] ?? null) }],
+  };
+}
+
+function drawChart() {
+  const model = chartModel();
+  const flat = model.series.flatMap(s => s.values).filter(v => v !== null && isFinite(v));
+  if (!flat.length) {
+    return `<div class="state"><h3>Нет данных</h3>
+      <p>Для выбранного показателя и регионов значений не нашлось.</p></div>`;
+  }
+  // Bars encode magnitude by length, so they must start at zero; a line encodes
+  // change, and forcing zero there just flattens the shape being read.
+  const floor = statsState.type === 'bar' ? Math.min(0, ...flat) : Math.min(...flat);
+  const ticks = niceTicks(floor, Math.max(...flat));
+  const low = ticks[0], high = ticks[ticks.length - 1];
+  const innerW = PLOT.w - PLOT.l - PLOT.r;
+  const innerH = PLOT.h - PLOT.t - PLOT.b;
+  const y = v => PLOT.t + innerH - ((v - low) / (high - low)) * innerH;
+  const step = innerW / Math.max(1, model.labels.length - (statsState.type === 'bar' ? 0 : 1));
+  const x = i => statsState.type === 'bar'
+    ? PLOT.l + step * (i + 0.5)
+    : PLOT.l + step * i;
+
+  const grid = ticks.map(t => `<line class="grid" x1="${PLOT.l}" x2="${PLOT.w - PLOT.r}"
+      y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>
+    <text class="tick" x="${PLOT.l - 10}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">${esc(shortNumber(t))}</text>`).join('');
+
+  // Thin out x labels so they never collide.
+  const everyNth = Math.ceil(model.labels.length / 14);
+  const xLabels = model.labels.map((label, i) => (i % everyNth) ? '' :
+    `<text class="tick" x="${x(i).toFixed(1)}" y="${PLOT.h - PLOT.b + 22}"
+       text-anchor="${statsState.xAxis === 'region' ? 'end' : 'middle'}"
+       ${statsState.xAxis === 'region' ? `transform="rotate(-35 ${x(i).toFixed(1)} ${PLOT.h - PLOT.b + 22})"` : ''}
+     >${esc(label.length > 22 ? label.slice(0, 21) + '…' : label)}</text>`).join('');
+
+  const marks = model.series.map((s, si) => {
+    const colour = seriesColour(si);
+    if (statsState.type === 'bar') {
+      const width = Math.max(2, (step / model.series.length) * 0.7);
+      return s.values.map((v, i) => v === null || !isFinite(v) ? '' : `<rect
+        x="${(x(i) - (width * model.series.length) / 2 + si * width).toFixed(1)}"
+        y="${Math.min(y(v), y(Math.max(low, 0))).toFixed(1)}" width="${width.toFixed(1)}"
+        height="${Math.max(1, Math.abs(y(v) - y(Math.max(low, 0)))).toFixed(1)}"
+        rx="3" fill="${colour}"><title>${esc(s.name)} · ${esc(model.labels[i])}: ${esc(fmt(v))}</title></rect>`).join('');
+    }
+    const points = s.values.map((v, i) => (v === null || !isFinite(v)) ? null : [x(i), y(v)]);
+    const path = points.reduce((acc, p, i) => {
+      if (!p) return acc;
+      const prev = i > 0 && points[i - 1];
+      return acc + (prev ? ` L${p[0].toFixed(1)} ${p[1].toFixed(1)}`
+                         : ` M${p[0].toFixed(1)} ${p[1].toFixed(1)}`);
+    }, '');
+    const dots = points.map((p, i) => !p ? '' :
+      `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${statsState.type === 'dot' ? 5 : 4}"
+        fill="${colour}" stroke="var(--surface)" stroke-width="2"><title>${esc(s.name)} · ${esc(model.labels[i])}: ${esc(fmt(s.values[i]))}</title></circle>`).join('');
+    return (statsState.type === 'line'
+      ? `<path d="${path}" fill="none" stroke="${colour}" stroke-width="2"
+           stroke-linejoin="round" stroke-linecap="round"/>` : '') + dots;
+  }).join('');
+
+  const legend = model.series.length > 1 ? `<ul class="legend">${model.series.map((s, i) =>
+    `<li><span class="swatch" style="background:${seriesColour(i)}"></span>${esc(s.name)}</li>`).join('')}</ul>` : '';
+
+  const caption = statsState.expr
+    ? `Формула ${esc(statsState.expr)}`
+    : esc(picks.length ? (seriesData.picks[0] || {}).label || '' : '');
+
+  return `<figure class="chart">
+    <figcaption>${caption}</figcaption>
+    <svg viewBox="0 0 ${PLOT.w} ${PLOT.h}" role="img"
+         aria-label="График: ${esc(caption)}" preserveAspectRatio="xMidYMid meet">
+      ${grid}
+      <line class="axis" x1="${PLOT.l}" x2="${PLOT.w - PLOT.r}" y1="${y(low).toFixed(1)}" y2="${y(low).toFixed(1)}"/>
+      ${xLabels}${marks}
+    </svg>
+    ${legend}
+  </figure>`;
+}
+
+function seriesTable() {
+  const model = chartModel();
+  return `<div class="table-scroll"><table class="data">
+    <thead><tr><th>Ряд</th>${model.labels.map(l => `<th class="num">${esc(l)}</th>`).join('')}</tr></thead>
+    <tbody>${model.series.map(s => `<tr><td>${esc(s.name)}</td>${
+      s.values.map(v => `<td class="amount">${v === null ? '<span class="muted">—</span>' : esc(fmt(v))}</td>`).join('')
+    }</tr>`).join('')}</tbody></table></div>`;
+}
+
+function statsParams() {
+  const params = new URLSearchParams();
+  for (const [index, pick] of picks.entries()) {
+    params.append('pick', `${slotName(index)}:${pick.form}:${pick.section}:${pick.code}`);
+  }
+  params.set('regions', statsState.mode === 'all' ? 'all' : statsState.regions.join(','));
+  if (statsState.expr.trim()) params.set('expr', statsState.expr.trim());
+  return params;
+}
+
+async function loadSeries() {
+  const box = el('view-stats').querySelector('#chart-area');
+  if (box) box.innerHTML = '<div class="state"><h3>Считаем…</h3></div>';
+  try {
+    seriesData = await api('/api/statistics/series?' + statsParams());
+  } catch (error) {
+    seriesData = null;
+    if (box) box.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+    return;
+  }
+  renderChartArea();
+}
+
+function renderChartArea() {
+  const box = el('view-stats').querySelector('#chart-area');
+  if (!box || !seriesData) return;
+  box.innerHTML = drawChart() + (statsState.table ? seriesTable() : '');
+}
+
+function renderStats() {
+  if (!cat) return;
+  el('view-stats').innerHTML = `
+    <h1 class="screen-title">Аналитика по данным ФНС</h1>
+    <p class="screen-note">Выберите показатель, регионы и вид графика. Формула считает
+      по каждому региону и году отдельно, результат попадает и в график, и в выгрузку.</p>
+    <div class="panels">${statsControls()}</div>
+    <div id="chart-area"></div>`;
+  loadSeries();
+}
+
+async function openStats() {
+  if (!cat) {
+    try {
+      cat = await api('/api/statistics/catalog');
+    } catch (error) {
+      el('view-stats').innerHTML = `<div class="error">${esc(error.message)}</div>`;
+      return;
+    }
+    if (!cat.available) {
+      el('view-stats').innerHTML = '<div class="state"><h3>Статистики нет</h3><p>Файлы с данными ФНС не найдены.</p></div>';
+      return;
+    }
+    // Open on a total rather than whatever code sorts first: the form numbers
+    // its own headline rows, and those are what anyone wants to see first.
+    const first = cat.forms[0];
+    const section = first.sections[0];
+    const headline = section.indicators.find(i => /^\s*\d+\s*[.)]/.test(i.label))
+      || section.indicators[0];
+    picks = [{ form: first.form, section: section.section, code: headline.code }];
+    statsState.year = cat.years[cat.years.length - 1];
+  }
+  renderStats();
+}
+
+el('view-stats').addEventListener('change', event => {
+  const target = event.target;
+  const row = target.closest('.pick');
+  if (row) {
+    const index = Number(row.dataset.index);
+    const which = target.dataset.pick;
+    if (which === 'form') {
+      const sections = sectionsOf(target.value);
+      picks[index] = { form: target.value, section: sections[0].section,
+                       code: sections[0].indicators[0].code };
+    } else if (which === 'section') {
+      const section = sectionsOf(picks[index].form)
+        .find(s => String(s.section) === target.value);
+      picks[index] = { ...picks[index], section: section.section,
+                       code: section.indicators[0].code };
+    } else {
+      picks[index] = { ...picks[index], code: target.value };
+    }
+    return renderStats();
+  }
+  if (target.matches('[data-regions]')) {
+    statsState.regions = [...target.selectedOptions].map(o => o.value);
+    return loadSeries();
+  }
+  if (target.matches('[data-type]')) { statsState.type = target.value; return renderChartArea(); }
+  if (target.matches('[data-xaxis]')) { statsState.xAxis = target.value; return renderStats(); }
+  if (target.matches('[data-year]')) { statsState.year = Number(target.value); return renderChartArea(); }
+});
+
+el('view-stats').addEventListener('click', event => {
+  const target = event.target;
+  if (target.closest('[data-add-pick]')) {
+    if (picks.length >= 6) return;
+    picks.push({ ...picks[picks.length - 1] });
+    return renderStats();
+  }
+  const drop = target.closest('[data-drop]');
+  if (drop) { picks.splice(Number(drop.dataset.drop), 1); return renderStats(); }
+  const mode = target.closest('[data-mode]');
+  if (mode) {
+    statsState.mode = mode.dataset.mode;
+    if (statsState.mode === 'one') statsState.regions = statsState.regions.slice(0, 1);
+    return renderStats();
+  }
+  if (target.closest('[data-table]')) {
+    statsState.table = !statsState.table;
+    return renderStats();
+  }
+  if (target.closest('[data-export-series]')) {
+    location.href = '/api/statistics/series.xlsx?' + statsParams();
+  }
+});
+
+// The formula is re-evaluated on the server, so wait for a pause in typing.
+let formulaTimer;
+el('view-stats').addEventListener('input', event => {
+  if (!event.target.matches('[data-expr]')) return;
+  statsState.expr = event.target.value;
+  clearTimeout(formulaTimer);
+  formulaTimer = setTimeout(loadSeries, 400);
+});

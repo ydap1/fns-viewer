@@ -16,9 +16,13 @@
       <span class="brand-mark" aria-hidden="true">НС</span>
       <span class="brand-text">
         <b>Налоговые ставки и льготы</b>
-        <small id="corpus">Локальный просмотрщик · только чтение</small>
+        <small id="corpus">Локальный просмотрщик</small>
       </span>
     </div>
+    <nav class="tabs" aria-label="Разделы программы">
+      <a href="#/" data-tab="search">Документы</a>
+      <a href="#/stats" data-tab="stats">Аналитика</a>
+    </nav>
   </div>
 </header>
 
@@ -89,8 +93,16 @@
   </section>
 
   <section id="view-doc" class="view" hidden></section>
+  <section id="view-stats" class="view" hidden></section>
 
 </main>
+
+<footer class="colophon">
+  <div class="wrap colophon-inner">
+    <span>Данные ФНС России: формы 5-МН, 5-НИО, 5-ТН.</span>
+    <span>Автор — <b>ydap</b> · <a href="https://github.com/ydap1/fns-viewer" rel="noreferrer">github.com/ydap1</a></span>
+  </div>
+</footer>
 
 <script src="/app.js"></script>
 </body>

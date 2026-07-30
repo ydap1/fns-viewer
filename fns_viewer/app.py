@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import sqlite3
 import threading
 import urllib.parse
 
 from . import statistics, store
 from .config import CODE_FIELDS, EXPORT_LIMIT, FIELD_LABELS, PAYER_FIELDS, STATIC
-from .export import make_xlsx
+from .export import make_xlsx, workbook
 from .xmlsource import fetch_record
 
 Response = tuple[int, dict[str, str], bytes]
@@ -52,6 +53,22 @@ def export_response(records, payer: str, name: str) -> Response:
     }, raw
 
 
+def series_workbook(data) -> Response:
+    """One row per region, one column per year — the shape people paste into Excel."""
+    title = data['expression'] or (data['picks'][0]['label'] if data['picks'] else 'Показатель')
+    headers = ['Код региона', 'Регион', *[str(year) for year in data['years']]]
+    rows = [[row['region'], row['name'], *row['values']] for row in data['rows']]
+    legend = [['Обозначение', 'Форма', 'Раздел', 'Код', 'Показатель']]
+    legend += [[p['slot'], p['form'], p['section'], p['code'], p['label']] for p in data['picks']]
+    if data['expression']:
+        legend.append(['Формула', data['expression'], '', '', ''])
+    raw = workbook([('Данные', headers, rows),
+                    ('Показатели', legend[0], legend[1:])])
+    return 200, {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': 'attachment; filename="fns_statistics.xlsx"',
+    }, raw
+
 def handle(path: str, params: dict[str, list[str]]) -> Response:
     if path == '/':
         return static_response('index.html')
@@ -75,6 +92,42 @@ def handle(path: str, params: dict[str, list[str]]) -> Response:
             payload = statistics.for_region(region, params.get('period', [''])[0], taxes)
             payload['available'] = True
             return json_response(payload)
+        if path == '/api/statistics/catalog':
+            if not statistics.available():
+                return json_response({'available': False})
+            data = statistics.catalog()
+            names = store.list_values(con)
+            by_code = {}
+            for value in names.values():
+                found = re.match(r'^(\d\d)\s*-\s*(.+)$', value)
+                if found:
+                    by_code[found.group(1)] = value
+            data['regions'] = [[code, by_code.get(code, code)] for code in data['regions']]
+            data['available'] = True
+            return json_response(data)
+        if path in ('/api/statistics/series', '/api/statistics/series.xlsx'):
+            picks = statistics.parse_picks(params.get('pick', []))
+            if not picks:
+                return json_response({'error': 'Не выбран показатель'}, 400)
+            wanted = [r for r in params.get('regions', [''])[0].split(',') if r]
+            if not wanted or wanted == ['all']:
+                wanted = sorted(statistics.load()['values'])
+            expression = params.get('expr', [''])[0]
+            try:
+                data = statistics.series(picks, wanted, expression)
+            except ValueError as error:
+                return json_response({'error': f'Формула: {error}'}, 400)
+            names = store.list_values(con)
+            titles = {}
+            for value in names.values():
+                found = re.match(r'^(\d\d)\s*-', value)
+                if found:
+                    titles[found.group(1)] = value
+            for row in data['rows']:
+                row['name'] = titles.get(row['region'], row['region'])
+            if path.endswith('.xlsx'):
+                return series_workbook(data)
+            return json_response(data)
         if path == '/api/search':
             return json_response(store.search(con, params))
         if path == '/api/export.xlsx':

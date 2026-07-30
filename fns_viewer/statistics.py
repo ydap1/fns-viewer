@@ -61,6 +61,18 @@ KNOWN_TITLES = {
     ("5-ТН", 1): "Транспортный налог — организации",
     ("5-ТН", 2): "Транспортный налог — физические лица",
 }
+# Which tax each section actually reports on. 5-МН covers two different taxes
+# across its three Разделы, so a land-tax document has no business showing the
+# individual-property section, and vice versa.
+SECTION_TAXES = {
+    ("5-МН", 1): ("2803",),
+    ("5-МН", 2): ("2803",),
+    ("5-МН", 3): ("2805",),
+    ("5-НИО", 1): ("2804",),
+    ("5-НИО", 2): ("2804",),
+    ("5-ТН", 1): ("2802",),
+    ("5-ТН", 2): ("2802",),
+}
 # Rows that are totals or grouping headers rather than a subject of the Federation.
 NOT_A_REGION = re.compile(
     r"федеральн\w*\s+округ|российская\s+федерация|в\s+том\s+числе|примечание"
@@ -338,7 +350,10 @@ def parse_single_region(rows: list[dict[str, str]]) -> list[tuple[int, str, str,
             pending = []
             continue
         code = str(cells.get("B", "")).strip()
-        if not re.fullmatch(r"\d{3,4}", code):
+        # Four digits only: the header block of these files also carries three
+        # digit fields (ОКАТО, код налогового органа) in the same column, and
+        # they are not indicators.
+        if not re.fullmatch(r"\d{4}", code):
             # Text with no code of its own is a sub-heading for the rows below,
             # except the table's own column headings.
             if first and len(first) > 3 and not TABLE_HEADING.match(first):
@@ -708,6 +723,180 @@ def merge_and_save(values, labels, titles, progress=print) -> None:
 
 # ---------------------------------------------------------------- reading back
 
+# ---------------------------------------------------------------- analysis
+
+def catalog() -> dict:
+    """Everything the analysis screen needs to offer a choice."""
+    table = load()
+    years, present = set(), {}
+    for by_year in table["values"].values():
+        for year, forms in by_year.items():
+            years.add(year)
+            for form, sections in forms.items():
+                for section, rows in sections.items():
+                    present.setdefault((form, section), set()).update(code for code, _ in rows)
+    forms = []
+    for code, (name, _covers) in FORMS.items():
+        sections = []
+        for (form, number), codes in sorted(present.items()):
+            if form != code:
+                continue
+            indicators = sorted(codes, key=int)
+            sections.append({
+                'section': number,
+                'title': (KNOWN_TITLES.get((form, number))
+                          or table["titles"].get((form, number)) or f'Раздел {number}'),
+                'taxes': list(SECTION_TAXES.get((form, number), ())),
+                'indicators': [{'code': c,
+                                'label': tidy_label(table["labels"].get((form, number, c), c))}
+                               for c in indicators],
+            })
+        if sections:
+            forms.append({'form': code, 'name': name, 'sections': sections})
+    return {'forms': forms, 'years': sorted(years),
+            'regions': sorted(table["values"])}
+
+
+class Formula:
+    """A tiny arithmetic evaluator over indicator slots named A, B, C…
+
+    Deliberately not `eval`: the expression arrives from a query string, and the
+    grammar it needs is four operators, parentheses and a unary minus.
+    """
+
+    TOKEN = re.compile(r"\s*(?:(\d+\.?\d*)|([A-Za-z])|(.))")
+
+    def __init__(self, text: str):
+        self.tokens = []
+        position = 0
+        while position < len(text):
+            match = self.TOKEN.match(text, position)
+            if not match or match.end() == position:
+                break
+            position = match.end()
+            number, name, symbol = match.groups()
+            if number is not None:
+                self.tokens.append(("num", float(number)))
+            elif name is not None:
+                self.tokens.append(("var", name.upper()))
+            elif symbol.strip():
+                if symbol not in "+-*/()":
+                    raise ValueError(f"недопустимый символ {symbol!r}")
+                self.tokens.append(("op", symbol))
+        self.at = 0
+
+    def _peek(self):
+        return self.tokens[self.at] if self.at < len(self.tokens) else (None, None)
+
+    def _take(self):
+        token = self._peek()
+        self.at += 1
+        return token
+
+    def evaluate(self, values: dict[str, float | None]) -> float | None:
+        self.at = 0
+        result = self._sum(values)
+        if self.at != len(self.tokens):
+            raise ValueError("лишние символы в формуле")
+        return result
+
+    def _sum(self, values):
+        left = self._product(values)
+        while self._peek() == ("op", "+") or self._peek() == ("op", "-"):
+            _, symbol = self._take()
+            right = self._product(values)
+            if left is None or right is None:
+                left = None
+            else:
+                left = left + right if symbol == "+" else left - right
+        return left
+
+    def _product(self, values):
+        left = self._unary(values)
+        while self._peek() == ("op", "*") or self._peek() == ("op", "/"):
+            _, symbol = self._take()
+            right = self._unary(values)
+            if left is None or right is None:
+                left = None
+            elif symbol == "*":
+                left = left * right
+            else:
+                left = None if right == 0 else left / right
+        return left
+
+    def _unary(self, values):
+        if self._peek() == ("op", "-"):
+            self._take()
+            inner = self._unary(values)
+            return None if inner is None else -inner
+        return self._atom(values)
+
+    def _atom(self, values):
+        kind, value = self._take()
+        if kind == "num":
+            return value
+        if kind == "var":
+            return values.get(value)
+        if (kind, value) == ("op", "("):
+            inner = self._sum(values)
+            if self._take() != ("op", ")"):
+                raise ValueError("не закрыта скобка")
+            return inner
+        raise ValueError("формула не разобрана")
+
+
+def parse_picks(raw: list[str]) -> list[dict]:
+    """Turn `A:5-МН:1:1100` strings into indicator slots."""
+    picks = []
+    for index, item in enumerate(raw):
+        parts = item.split(":")
+        if len(parts) == 4:
+            slot, form, section, code = parts
+        elif len(parts) == 3:
+            slot, form, section, code = chr(65 + index), *parts
+        else:
+            raise ValueError(f"не разобран показатель {item!r}")
+        picks.append({'slot': slot.upper()[:1], 'form': form,
+                      'section': int(section), 'code': code})
+    return picks
+
+
+def series(picks: list[dict], regions: list[str], expression: str = "") -> dict:
+    """A year × region matrix for one indicator, or for a formula over several."""
+    table = load()
+    formula = Formula(expression) if expression.strip() else None
+    labels = table["labels"]
+
+    years = sorted({year for region in regions
+                    for year in table["values"].get(region, {})})
+    rows = []
+    for region in regions:
+        by_year = table["values"].get(region, {})
+        points = []
+        for year in years:
+            slots: dict[str, float | None] = {}
+            for pick in picks:
+                found = (by_year.get(year, {}).get(pick['form'], {})
+                         .get(pick['section'], []))
+                slots[pick['slot']] = next(
+                    (amount for code, amount in found if code == pick['code']), None)
+            if formula is None:
+                points.append(slots.get(picks[0]['slot']) if picks else None)
+            else:
+                try:
+                    points.append(formula.evaluate(slots))
+                except ValueError:
+                    points.append(None)
+        rows.append({'region': region, 'values': points})
+
+    described = [{'slot': p['slot'], 'form': p['form'], 'section': p['section'],
+                  'code': p['code'],
+                  'label': tidy_label(labels.get((p['form'], p['section'], p['code']), p['code']))}
+                 for p in picks]
+    return {'years': years, 'rows': rows, 'picks': described,
+            'expression': expression.strip()}
+
+
 def available() -> bool:
     return VALUES_FILE.exists()
 
@@ -737,6 +926,9 @@ def for_region(region: str, year: str | int | None, taxes: tuple[str, ...] = ())
             continue
         sections = []
         for number, rows in sorted(by_year[chosen].get(code, {}).items()):
+            covers = SECTION_TAXES.get((code, number))
+            if taxes and covers and not set(taxes) & set(covers):
+                continue
             items = []
             for indicator, amount in sorted(rows, key=lambda row: int(row[0])):
                 label = labels.get((code, number, indicator), indicator)
