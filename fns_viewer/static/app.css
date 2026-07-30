@@ -342,6 +342,29 @@ table { border-collapse: collapse; width: 100%; background: var(--surface); }
   margin: 34px 0 10px;
 }
 .section-head h2 { font-size: 17px; }
+
+/* The whole heading folds its section away, so it is a button that still reads
+   as a heading. */
+.section-toggle {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 4px 8px 4px 4px; margin-left: -4px;
+  background: none; border: 0; border-radius: var(--r);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: background-color .15s ease;
+}
+.section-toggle:hover { background: var(--accent-soft); }
+.section-toggle:hover h2 { color: var(--accent-ink); }
+.chev {
+  width: 9px; height: 9px; flex: none; align-self: center;
+  border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3);
+  transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform .18s ease;
+}
+.section-toggle[aria-expanded="false"] .chev {
+  transform: rotate(-45deg) translate(-1px, 1px);
+}
+.doc-section.collapsed .section-body { display: none; }
+.doc-section.collapsed .section-head { margin-bottom: 0; }
 .section-head .count { color: var(--ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
 .section-head label { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .section-head select { min-height: 34px; padding: 5px 9px; font-size: 13.5px; min-width: 0; }
@@ -433,7 +456,7 @@ table { border-collapse: collapse; width: 100%; background: var(--surface); }
   text-transform: uppercase; color: var(--ink-3); margin-right: 6px;
 }
 /* Anchors sit under the sticky bar unless their scroll target is offset. */
-[id^="sec-"] { scroll-margin-top: 62px; }
+.doc-section { scroll-margin-top: 64px; }
 
 .stat-title {
   margin: 18px 0 8px; font-size: 14.5px; font-weight: 600; color: var(--ink-2);

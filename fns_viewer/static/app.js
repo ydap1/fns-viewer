@@ -283,10 +283,25 @@ function payerBar() {
   </div>`;
 }
 
-function sectionHead(title, shown, total, control, id) {
-  const suffix = shown === total ? count(total) : `${count(shown)} из ${count(total)}`;
-  return `<div class="section-head"${id ? ` id="${id}"` : ''}>
-    <h2>${esc(title)} <span class="count">${suffix}</span></h2>${control}</div>`;
+const shownOf = (shown, total) => shown === total ? count(total) : `${count(shown)} из ${count(total)}`;
+
+function sectionHead(title, suffix, control, id) {
+  // The heading is the toggle; the ranking select sits outside it so choosing
+  // an order does not also fold the section away.
+  return `<div class="section-head">
+    <button type="button" class="section-toggle" data-toggle="${esc(id)}"
+            aria-expanded="${!collapsed.has(id)}">
+      <span class="chev" aria-hidden="true"></span>
+      <h2>${esc(title)} <span class="count">${suffix}</span></h2>
+    </button>${control}</div>`;
+}
+
+// Which sections the reader has folded away, kept across re-renders.
+const collapsed = new Set();
+
+function docSection(id, title, suffix, control, body) {
+  return `<section class="doc-section${collapsed.has(id) ? ' collapsed' : ''}" id="${esc(id)}">
+    ${sectionHead(title, suffix, control, id)}<div class="section-body">${body}</div></section>`;
 }
 
 const emptyNote = () => `<p class="note">Для выбранной категории плательщиков записей нет.
@@ -319,8 +334,11 @@ function ratesSection() {
   const items = forPayer(doc.rates, payer);
   const control = `<label>Ранжировать
     <select data-rate-sort>${optionTags(RATE_SORTS, rateSort)}</select></label>`;
-  const head = sectionHead('Налоговые ставки', items.length, doc.rates.length, control, 'sec-rates');
-  if (!items.length) return head + (doc.rates.length ? emptyNote() : '<p class="note">В документе нет ставок.</p>');
+  const suffix = shownOf(items.length, doc.rates.length);
+  if (!items.length) {
+    return docSection('sec-rates', 'Налоговые ставки', suffix, control,
+      doc.rates.length ? emptyNote() : '<p class="note">В документе нет ставок.</p>');
+  }
 
   const groups = rateGroups(items);
   // Only regions that spell out limits after a colon fill the detail column,
@@ -347,10 +365,11 @@ function ratesSection() {
       <td class="ident">${esc(x.ID || '')}</td></tr>`).join('');
   }).join('');
 
-  return head + `<div class="table-scroll"><table class="data">
-    <colgroup>${columns.map(c => c[0]).join('')}</colgroup>
-    <thead><tr>${columns.map(c => c[1]).join('')}</tr></thead>
-    <tbody>${body}</tbody></table></div>`;
+  return docSection('sec-rates', 'Налоговые ставки', suffix, control,
+    `<div class="table-scroll"><table class="data">
+      <colgroup>${columns.map(c => c[0]).join('')}</colgroup>
+      <thead><tr>${columns.map(c => c[1]).join('')}</tr></thead>
+      <tbody>${body}</tbody></table></div>`);
 }
 
 // Roughly four lines in this column; below that a toggle is just noise.
@@ -368,8 +387,11 @@ function benefitsSection() {
   const items = forPayer(doc.benefits, payer).map(x => ({ ...x, amount: num(x.Amount) }));
   const control = `<label>Ранжировать
     <select data-benefit-sort>${optionTags(BENEFIT_SORTS, benefitSort)}</select></label>`;
-  const head = sectionHead('Льготы', items.length, doc.benefits.length, control, 'sec-benefits');
-  if (!items.length) return head + (doc.benefits.length ? emptyNote() : '<p class="note">В документе нет льгот.</p>');
+  const suffix = shownOf(items.length, doc.benefits.length);
+  if (!items.length) {
+    return docSection('sec-benefits', 'Льготы', suffix, control,
+      doc.benefits.length ? emptyNote() : '<p class="note">В документе нет льгот.</p>');
+  }
 
   if (benefitSort === 'amount') items.sort((a, b) => (b.amount ?? -1) - (a.amount ?? -1)
     || tidy(a.Category).localeCompare(tidy(b.Category), 'ru'));
@@ -386,16 +408,17 @@ function benefitsSection() {
     <td>${esc(tidy(x.LawArticle)) || '<span class="muted">—</span>'}</td>
     <td class="ident">${esc(x.ID || '')}</td></tr>`).join('');
 
-  return head + `<div class="table-scroll"><table class="data">
+  return docSection('sec-benefits', 'Льготы', suffix, control,
+    `<div class="table-scroll"><table class="data">
     <colgroup><col style="width:24%"><col style="width:130px"><col style="width:110px">
       <col style="width:16%"><col><col style="width:120px"><col style="width:110px"></colgroup>
     <thead><tr><th>Категория налогоплательщика</th><th class="num">Размер</th>
       <th>Плательщики</th><th>Основание</th><th>Условия предоставления</th>
       <th>Статья</th><th>Идентификатор</th></tr></thead>
-    <tbody>${body}</tbody></table></div>`;
+    <tbody>${body}</tbody></table></div>`);
 }
 
-/* ---------- statistics (form 5-МН) ---------- */
+/* ---------- statistics ---------- */
 
 // The form is published per subject of the Federation, never per municipality,
 // so a municipal document is shown its region's totals and told as much.
@@ -405,8 +428,8 @@ let statsAll = false;
 function statsSection() {
   if (!stats || !stats.available) return '';
   if (!stats.forms || !stats.forms.length) {
-    return `<section id="sec-stats"><div class="section-head"><h2>Начисления по данным ФНС</h2></div>
-      <p class="note">Для этого региона статистики нет.</p></section>`;
+    return docSection('sec-stats', 'Начисления по данным ФНС', '', '',
+      '<p class="note">Для этого региона статистики нет.</p>');
   }
   const municipal = tidy(doc.attributes.MunObraz);
   const asked = tidy(doc.attributes.TaxPeriod);
@@ -438,11 +461,8 @@ function statsSection() {
           <thead><tr><th>Показатель</th><th class="num">Значение, тыс. руб. / единиц</th><th>Код</th></tr></thead>
           <tbody>${rows}</tbody></table></div>`;
     }).join('');
-    return `<section id="sec-${esc(form.form)}">
-      <div class="section-head"><h2>${esc(form.form)} — ${esc(form.name)}
-        <span class="count">${esc(shown)}</span></h2>${picker}</div>
-      ${caveats.length ? `<p class="note">Показаны ${caveats.join('; ')}.</p>` : ''}
-      ${tables}</section>`;
+    return docSection(`sec-${form.form}`, `${form.form} — ${form.name}`, esc(shown), picker,
+      (caveats.length ? `<p class="note">Показаны ${caveats.join('; ')}.</p>` : '') + tables);
   }).join('');
 
   const total = stats.forms.reduce((n, f) =>
@@ -585,6 +605,33 @@ viewDoc.addEventListener('click', event => {
     target.closest('.more').textContent = open ? 'Свернуть' : 'Показать полностью';
   }
 });
+// A contents link must not reach the hash router: "#sec-5-ТН" is not a route,
+// so letting the browser set it sent the reader back to the search screen.
+viewDoc.addEventListener('click', event => {
+  const jump = event.target.closest('[data-toc]');
+  if (jump) {
+    event.preventDefault();
+    const id = jump.dataset.toc;
+    collapsed.delete(id);            // jumping to a folded section opens it
+    const section = document.getElementById(id);
+    if (section) {
+      section.classList.remove('collapsed');
+      section.querySelector('.section-toggle')?.setAttribute('aria-expanded', 'true');
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    return;
+  }
+  const toggle = event.target.closest('.section-toggle');
+  if (toggle) {
+    const id = toggle.dataset.toggle;
+    const open = collapsed.has(id);
+    if (open) collapsed.delete(id); else collapsed.add(id);
+    const section = document.getElementById(id);
+    section?.classList.toggle('collapsed', !open);
+    toggle.setAttribute('aria-expanded', String(open));
+  }
+});
+
 viewDoc.addEventListener('change', async event => {
   if (event.target.matches('[data-rate-sort]')) { rateSort = event.target.value; renderDoc(); }
   if (event.target.matches('[data-benefit-sort]')) { benefitSort = event.target.value; renderDoc(); }
