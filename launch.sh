@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Update from git, then start the viewer. macOS and Linux counterpart of launch.bat.
+# Update from git, then start the viewer. Linux and macOS.
 #
-# The whole script is one function called on the last line: bash parses a
+# The whole script is one function called on the last line: the shell parses a
 # function completely before running it, so `git pull` replacing this file
-# mid-run cannot make the shell resume at a stale byte offset.
-set -uo pipefail
+# mid-run cannot make it resume at a stale byte offset. `$0` rather than
+# BASH_SOURCE, and no `pipefail`, so it still behaves if run as `sh launch.sh`.
+set -u
 
 main() {
-  cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+  cd "$(dirname "$0")" || exit 1
 
   if ! command -v git >/dev/null 2>&1; then
-    printf '\n[!] Git is not installed, so this copy cannot receive updates.\n\n'
+    printf '\n[!] Git is not installed, so this copy cannot receive updates.\n'
+    printf '    Linux: install git with your package manager.\n'
+    printf '    macOS: run `xcode-select --install`, or install from https://git-scm.com\n\n'
   elif [ ! -d .git ]; then
     printf '\n[!] This folder is not a Git clone, so it will never update.\n'
     printf '    Replace it with:\n'
@@ -30,7 +33,6 @@ main() {
     exit 1
   fi
 
-  local python
   python=$(command -v python3 || command -v python) || {
     printf '\n[!] Python 3 not found. Install it and run this file again.\n\n'
     exit 1
