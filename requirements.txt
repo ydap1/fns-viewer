@@ -1,0 +1,10 @@
+# Optional. The viewer itself runs on the standard library alone; this is only
+# needed to import form 5-МН for the years the tax service published as binary
+# .xls (2010, 2013, 2020-2022). Everything else is .xlsx, which is a zip of XML
+# and is read with zipfile + ElementTree.
+#
+#   pip install -r requirements.txt
+#
+# xlrd 2.x reads .xls only, which is exactly the gap; it is pure Python with no
+# build step, so it installs on a locked-down machine without a compiler.
+xlrd>=2.0.1,<3

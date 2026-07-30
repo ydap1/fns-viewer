@@ -44,7 +44,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--host', default='127.0.0.1',
                         help='адрес прослушивания; 0.0.0.0 открывает доступ по сети')
     parser.add_argument('--open-browser', action='store_true', help='открыть просмотрщик в браузере')
+    parser.add_argument('--update-stats', action='store_true',
+                        help='загрузить с nalog.gov.ru статистику по форме 5-МН и выйти')
     args = parser.parse_args(argv)
+
+    if args.update_stats:
+        from . import statistics
+        statistics.update()
+        return
 
     if args.rebuild:
         store.build_index()
