@@ -283,9 +283,9 @@ function payerBar() {
   </div>`;
 }
 
-function sectionHead(title, shown, total, control) {
+function sectionHead(title, shown, total, control, id) {
   const suffix = shown === total ? count(total) : `${count(shown)} из ${count(total)}`;
-  return `<div class="section-head">
+  return `<div class="section-head"${id ? ` id="${id}"` : ''}>
     <h2>${esc(title)} <span class="count">${suffix}</span></h2>${control}</div>`;
 }
 
@@ -319,7 +319,7 @@ function ratesSection() {
   const items = forPayer(doc.rates, payer);
   const control = `<label>Ранжировать
     <select data-rate-sort>${optionTags(RATE_SORTS, rateSort)}</select></label>`;
-  const head = sectionHead('Налоговые ставки', items.length, doc.rates.length, control);
+  const head = sectionHead('Налоговые ставки', items.length, doc.rates.length, control, 'sec-rates');
   if (!items.length) return head + (doc.rates.length ? emptyNote() : '<p class="note">В документе нет ставок.</p>');
 
   const groups = rateGroups(items);
@@ -368,7 +368,7 @@ function benefitsSection() {
   const items = forPayer(doc.benefits, payer).map(x => ({ ...x, amount: num(x.Amount) }));
   const control = `<label>Ранжировать
     <select data-benefit-sort>${optionTags(BENEFIT_SORTS, benefitSort)}</select></label>`;
-  const head = sectionHead('Льготы', items.length, doc.benefits.length, control);
+  const head = sectionHead('Льготы', items.length, doc.benefits.length, control, 'sec-benefits');
   if (!items.length) return head + (doc.benefits.length ? emptyNote() : '<p class="note">В документе нет льгот.</p>');
 
   if (benefitSort === 'amount') items.sort((a, b) => (b.amount ?? -1) - (a.amount ?? -1)
@@ -402,13 +402,11 @@ function benefitsSection() {
 let stats = null;
 let statsAll = false;
 
-const STAT_SECTION_TAX = { 1: '2803', 2: '2803', 3: '2805' };
-
 function statsSection() {
   if (!stats || !stats.available) return '';
-  if (!stats.sections || !stats.sections.length) {
-    return `<div class="section-head"><h2>Начисления по форме 5-МН</h2></div>
-      <p class="note">Для этого региона данных формы 5-МН нет.</p>`;
+  if (!stats.forms || !stats.forms.length) {
+    return `<section id="sec-stats"><div class="section-head"><h2>Начисления по данным ФНС</h2></div>
+      <p class="note">Для этого региона статистики нет.</p></section>`;
   }
   const municipal = tidy(doc.attributes.MunObraz);
   const asked = tidy(doc.attributes.TaxPeriod);
@@ -422,29 +420,69 @@ function statsSection() {
   if (municipal) caveats.push(`данные по региону <b>${esc(doc.region)}</b> целиком, а не по «${esc(municipal)}»`);
   if (asked && asked !== shown) caveats.push(`ближайший доступный год — <b>${esc(shown)}</b>, документ за ${esc(asked)}`);
 
-  const tables = stats.sections.map(section => {
-    // The form's own numbered rows are the totals; the rest breaks them down
-    // into dozens of exemption codes that nobody reads at a glance.
-    const shown = statsAll ? section.items : section.items.filter(item => item.headline);
-    const rows = shown.map(item => `<tr${item.headline ? ' class="headline"' : ''}>
-      <td>${esc(item.label)}</td>
-      <td class="amount">${item.amount === null ? '<span class="muted">—</span>' : esc(fmt(item.amount))}</td>
-      <td class="ident">${esc(item.code)}</td></tr>`).join('');
-    return `<h3 class="stat-title">${esc(section.title)}</h3>
-      <div class="table-scroll"><table class="data">
-        <colgroup><col><col style="width:170px"><col style="width:80px"></colgroup>
-        <thead><tr><th>Показатель</th><th class="num">Значение, тыс. руб. / единиц</th><th>Код</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>`;
+  const blocks = stats.forms.map(form => {
+    const tables = form.sections.map(section => {
+      // The form's own numbered rows are its totals; the rest breaks them down
+      // into dozens of exemption codes that nobody reads at a glance.
+      // 5-ТН writes every row as a branch of a numbered parent, so almost
+      // nothing reads as a top-level total; showing the lot beats showing three.
+      const headline = section.items.filter(i => i.headline);
+      const rows = (statsAll || headline.length < 4 ? section.items : headline)
+        .map(item => `<tr${item.headline ? ' class="headline"' : ''}>
+          <td>${esc(item.label)}</td>
+          <td class="amount">${item.amount === null ? '<span class="muted">—</span>' : esc(fmt(item.amount))}</td>
+          <td class="ident">${esc(item.code)}</td></tr>`).join('');
+      return `<h3 class="stat-title">${esc(section.title)}</h3>
+        <div class="table-scroll"><table class="data">
+          <colgroup><col><col style="width:170px"><col style="width:80px"></colgroup>
+          <thead><tr><th>Показатель</th><th class="num">Значение, тыс. руб. / единиц</th><th>Код</th></tr></thead>
+          <tbody>${rows}</tbody></table></div>`;
+    }).join('');
+    return `<section id="sec-${esc(form.form)}">
+      <div class="section-head"><h2>${esc(form.form)} — ${esc(form.name)}
+        <span class="count">${esc(shown)}</span></h2>${picker}</div>
+      ${caveats.length ? `<p class="note">Показаны ${caveats.join('; ')}.</p>` : ''}
+      ${tables}</section>`;
   }).join('');
-  const total = stats.sections.reduce((n, s) => n + s.items.length, 0);
-  const toggle = `<button type="button" class="more" data-stat-all>${
+
+  const total = stats.forms.reduce((n, f) =>
+    n + f.sections.reduce((m, s) => m + s.items.length, 0), 0);
+  return blocks + `<button type="button" class="more" data-stat-all>${
     statsAll ? 'Показать только итоговые строки'
              : `Показать все показатели (${count(total)})`}</button>`;
+}
 
-  return `<div class="section-head">
-      <h2>Начисления по форме 5-МН <span class="count">${esc(shown)}</span></h2>${picker}</div>
-    ${caveats.length ? `<p class="note">Показаны ${caveats.join('; ')}.</p>` : ''}
-    ${tables}${toggle}`;
+// One line of jump links: a document runs to several screens once the rates,
+// the exemptions and three statistical forms are all on it.
+function tableOfContents() {
+  const entries = [['sec-rates', 'Ставки', forPayer(doc.rates, payer).length],
+                   ['sec-benefits', 'Льготы', forPayer(doc.benefits, payer).length]];
+  for (const form of (stats && stats.forms) || []) entries.push([`sec-${form.form}`, form.form, null]);
+  if (entries.length < 2) return '';
+  return `<nav class="toc" aria-label="Разделы документа"><span class="toc-label">Разделы</span>${
+    entries.map(([id, name, n]) =>
+      `<a href="#${id}" data-toc="${id}">${esc(name)}${n === null ? '' : ` <b>${count(n)}</b>`}</a>`)
+      .join('')}</nav>`;
+}
+
+// Highlight whichever section is currently on screen.
+let tocWatcher = null;
+function watchToc() {
+  if (tocWatcher) tocWatcher.disconnect();
+  const links = [...viewDoc.querySelectorAll('[data-toc]')];
+  if (!links.length) return;
+  tocWatcher = new IntersectionObserver(seen => {
+    for (const entry of seen) {
+      if (!entry.isIntersecting) continue;
+      for (const link of links) {
+        link.setAttribute('aria-current', String(link.dataset.toc === entry.target.id));
+      }
+    }
+  }, { rootMargin: '-60px 0px -70% 0px' });
+  for (const link of links) {
+    const target = document.getElementById(link.dataset.toc);
+    if (target) tocWatcher.observe(target);
+  }
 }
 
 async function loadStats() {
@@ -452,7 +490,8 @@ async function loadStats() {
   if (!code) { stats = null; return; }
   try {
     stats = await api('/api/statistics?' + new URLSearchParams(
-      { region: code[1], period: tidy(doc.attributes.TaxPeriod) }));
+      { region: code[1], period: tidy(doc.attributes.TaxPeriod),
+        tax: tidy(doc.attributes.Nalog_ID) }));
   } catch {
     stats = null;  // statistics are optional; the document still stands on its own
   }
@@ -460,11 +499,12 @@ async function loadStats() {
 
 function renderDoc() {
   viewDoc.innerHTML = `<button type="button" class="back" data-back>← К результатам</button>`
-    + citation() + payerBar() + ratesSection() + benefitsSection() + statsSection()
+    + citation() + payerBar() + tableOfContents() + ratesSection() + benefitsSection() + statsSection()
     + `<div class="doc-actions">
         <button type="button" class="button button-primary" data-export-doc>Скачать документ в Excel</button>
         <button type="button" class="button" data-print>Распечатать</button>
       </div>`;
+  watchToc();
 }
 
 /* ---------- events ---------- */
@@ -551,7 +591,8 @@ viewDoc.addEventListener('change', async event => {
   if (event.target.matches('[data-stat-year]')) {
     const code = /^(\d\d)\s*-/.exec(tidy(doc.region));
     stats = await api('/api/statistics?' + new URLSearchParams(
-      { region: code[1], period: event.target.value }));
+      { region: code[1], period: event.target.value,
+        tax: tidy(doc.attributes.Nalog_ID) }));
     renderDoc();
   }
 });

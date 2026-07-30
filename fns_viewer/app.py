@@ -71,9 +71,9 @@ def handle(path: str, params: dict[str, list[str]]) -> Response:
             region = params.get('region', [''])[0].strip()
             if not region:
                 return json_response({'error': 'Не указан регион'}, 400)
-            payload = statistics.for_region(region, params.get('period', [''])[0])
+            taxes = tuple(t for t in params.get('tax', [''])[0].split(',') if t)
+            payload = statistics.for_region(region, params.get('period', [''])[0], taxes)
             payload['available'] = True
-            payload['form'] = '5-МН'
             return json_response(payload)
         if path == '/api/search':
             return json_response(store.search(con, params))

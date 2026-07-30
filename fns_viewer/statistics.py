@@ -34,23 +34,37 @@ from .config import PACKAGE
 # it delivers the code — no import step, no network, no pip install. Only
 # whoever refreshes it for a new year needs xlrd and a built XML index.
 DATA = PACKAGE / "data"
-VALUES_FILE = DATA / "5mn-values.csv.gz"
-INDICATORS_FILE = DATA / "5mn-indicators.csv.gz"
+VALUES_FILE = DATA / "stats-values.csv.gz"
+INDICATORS_FILE = DATA / "stats-indicators.csv.gz"
+SECTIONS_FILE = DATA / "stats-sections.csv.gz"
+
+# The three forms that correspond to taxes data.xml actually carries.
+FORMS = {
+    "5-МН": ("Местные налоги", ("2803", "2805")),
+    "5-НИО": ("Налог на имущество организаций", ("2804",)),
+    "5-ТН": ("Транспортный налог", ("2802",)),
+}
 
 FORMS_URL = "https://www.nalog.gov.ru/rn77/related_activities/statistics_and_analytics/forms/"
 USER_AGENT = "fns-viewer/2.1 (local tax rate viewer; +https://github.com/ydap1/fns-viewer)"
 POLITE_DELAY = 1.0  # seconds between requests to nalog.gov.ru
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
-SECTIONS = {
-    1: "Земельный налог — организации",
-    2: "Земельный налог — физические лица",
-    3: "Налог на имущество физических лиц",
+# Section titles are read out of each sheet's own heading, except for 5-МН,
+# whose Разделы are named only in the workbook's first page.
+KNOWN_TITLES = {
+    ("5-МН", 1): "Земельный налог — организации",
+    ("5-МН", 2): "Земельный налог — физические лица",
+    ("5-МН", 3): "Налог на имущество физических лиц",
+    ("5-НИО", 1): "Налог на имущество организаций — по декларациям",
+    ("5-НИО", 2): "Налог на имущество организаций — льготы и вычеты",
+    ("5-ТН", 1): "Транспортный налог — организации",
+    ("5-ТН", 2): "Транспортный налог — физические лица",
 }
 # Rows that are totals or grouping headers rather than a subject of the Federation.
 NOT_A_REGION = re.compile(
     r"федеральн\w*\s+округ|российская\s+федерация|в\s+том\s+числе|примечание"
-    r"|субъекты|итого|всего|^\s*$", re.I)
+    r"|субъекты|итого|всего|начальник|управлени|^\s*$", re.I)
 # These sheets are typed by hand and contain Latin letters that look Cyrillic:
 # "Ямало-Hенецкий" carries a Latin H. Fold them before comparing names.
 CONFUSABLES = str.maketrans("ABCEHKMOPTXaceopxy", "АВСЕНКМОРТХасеорху")
@@ -72,40 +86,52 @@ def _read(path):
 
 
 def load() -> dict:
-    """Read the shipped tables into memory once. 249k rows is about 30 MB."""
+    """Read the shipped tables into memory once."""
     global _loaded
     if _loaded is not None:
         return _loaded
-    values: dict[str, dict[int, dict[int, list]]] = {}
-    labels: dict[tuple[int, str], str] = {}
+    values: dict[str, dict[int, dict[str, dict[int, list]]]] = {}
+    labels: dict[tuple[str, int, str], str] = {}
+    titles: dict[tuple[str, int], str] = {}
     if VALUES_FILE.exists():
         for row in _read(VALUES_FILE):
             amount = row["amount"]
             (values.setdefault(row["region"], {})
                    .setdefault(int(row["year"]), {})
+                   .setdefault(row["form"], {})
                    .setdefault(int(row["section"]), [])
                    .append((row["code"], float(amount) if amount != "" else None)))
     if INDICATORS_FILE.exists():
         for row in _read(INDICATORS_FILE):
-            labels[(int(row["section"]), row["code"])] = row["label"]
-    _loaded = {"values": values, "labels": labels}
+            labels[(row["form"], int(row["section"]), row["code"])] = row["label"]
+    if SECTIONS_FILE.exists():
+        for row in _read(SECTIONS_FILE):
+            titles[(row["form"], int(row["section"]))] = row["title"]
+    _loaded = {"values": values, "labels": labels, "titles": titles}
     return _loaded
 
 
-def save(values, indicators) -> None:
-    """Write the two shipped tables. Only the refresh path calls this."""
+def save(values, indicators, sections) -> None:
+    """Write the shipped tables. Only the refresh path calls this."""
     DATA.mkdir(exist_ok=True)
 
     def write(path, header, rows):
         # mtime=0 keeps the gzip byte-identical when the data has not changed,
         # so an unchanged refresh does not show up as a diff.
         with gzip.GzipFile(path, "wb", compresslevel=9, mtime=0) as raw:
-            writer = csv.writer(io.TextIOWrapper(raw, "utf-8", newline=""))
+            text = io.TextIOWrapper(raw, "utf-8", newline="")
+            writer = csv.writer(text)
             writer.writerow(header)
             writer.writerows(rows)
+            # Closing the GzipFile does not drain the text buffer above it: that
+            # silently truncated the tail of every table and left the smallest
+            # one empty, because its content never filled a buffer at all.
+            text.flush()
+            text.detach()
 
-    write(VALUES_FILE, ["year", "section", "region", "code", "amount"], values)
-    write(INDICATORS_FILE, ["section", "code", "label"], indicators)
+    write(VALUES_FILE, ["form", "year", "section", "region", "code", "amount"], values)
+    write(INDICATORS_FILE, ["form", "section", "code", "label"], indicators)
+    write(SECTIONS_FILE, ["form", "section", "title"], sections)
 
 
 def normalise(name: str) -> str:
@@ -248,17 +274,34 @@ def parse_sheet(rows: list[dict[str, str]], name: str) -> tuple[list[tuple[str, 
     The sheet carries a stacked header: several rows of prose, then a row of
     stable numeric row codes (1100, 1110, …), then one row per subject.
     """
-    header_at = None
-    for index, cells in enumerate(rows[:25]):
-        codes = [v for k, v in cells.items() if k != "A" and re.fullmatch(r"\d{3,4}", v or "")]
-        if len(codes) >= 3:
-            header_at = index
-            break
+    # The code row is the last one in the header zone that is followed by a
+    # subject name. Matching the first row of 3-4 digit numbers instead picks up
+    # 5-ТН data rows, whose leading figures look exactly like row codes.
+    # Below the code row come "РОССИЙСКАЯ ФЕДЕРАЦИЯ", "в том числе:" and a
+    # federal district before the first real subject, so the lookahead has to
+    # reach past them or the genuine code row is rejected.
+    def is_subject(cells: dict[str, str]) -> bool:
+        first = cells.get("A", "")
+        return bool(first) and not re.fullmatch(r"[\d\s.,]+", first) and not NOT_A_REGION.search(first)
+
+    def candidates(pattern):
+        for index, cells in enumerate(rows[:25]):
+            codes = [v for k, v in cells.items() if k != "A" and re.fullmatch(pattern, v or "")]
+            if len(codes) >= 3 and any(is_subject(l) for l in rows[index + 1:index + 10]):
+                yield index
+
+    # Four digits first: 5-ТН data rows open with three-digit figures that look
+    # exactly like row codes, so the loose pattern is only a fallback.
+    header_at = next(candidates(r"\d{4}"), None)
+    width = r"\d{4}"
+    if header_at is None:
+        header_at = next(candidates(r"\d{3,4}"), None)
+        width = r"\d{3,4}"
     if header_at is None:
         raise ValueError(f"{name}: не найдена строка с кодами показателей")
 
     code_of = {column: text for column, text in rows[header_at].items()
-               if column != "A" and re.fullmatch(r"\d{3,4}", text or "")}
+               if column != "A" and re.fullmatch(width, text or "")}
     # Build a label per column from the prose rows stacked above the codes.
     indicators = []
     for position, (column, code) in enumerate(sorted(code_of.items(), key=lambda kv: (len(kv[0]), kv[0]))):
@@ -285,25 +328,37 @@ def _fetch(url: str, timeout: int = 120) -> bytes:
         return response.read()
 
 
-def discover() -> dict[int, str]:
-    """Find the per-year archive of 5-МН broken down by subject.
+# A form label is written either as its own cell (>5-МН<) or inline as №5-МН.
+# Missing the second spelling is what made Moscow look like it had no 5-МН.
+LABEL = r"(?:>|№)\s*(\d{1,2}-[А-ЯЁ]{2,5})\s*(?:<|\s)"
 
-    Older years link straight to a file; from 2012 the year links to a page that
-    holds it. The archive whose name ends in `reg` is the one with every subject
-    in it — the plain file is the Russia total only.
+
+def form_row(part: str, code: str) -> str | None:
+    """The slice of markup belonging to one form's row."""
+    labels = [(m.start(), m.group(1)) for m in re.finditer(LABEL, part)]
+    position = next((i for i, (_, found) in enumerate(labels) if found == code), None)
+    if position is None:
+        return None
+    start = labels[position][0]
+    end = labels[position + 1][0] if position + 1 < len(labels) else len(part)
+    return part[start:end]
+
+
+def discover(form: str = "5-МН") -> dict[int, str]:
+    """Find the per-year archive of `form` broken down by subject.
+
+    Older years link straight to a file; later ones link to a page that holds it.
+    The archive with "reg" in its name is the one with every subject in it — the
+    plain file next to it is the Russia total only.
     """
     page = _fetch(FORMS_URL).decode("utf-8", "replace")
     boundary = [m.start() for m in re.finditer("Отчеты, сформированные УФНС", page)]
     federal = page[:boundary[-1]] if boundary else page
     # The table markup is not well-formed enough to split on <tr>: doing so
     # hands 5-МН the year links belonging to 5-ТИ. Slice between form labels.
-    labels = [(m.start(), m.group(1)) for m in re.finditer(r">\s*(\d{1,2}-[А-ЯЁ]{2,5})\s*<", federal)]
-    position = next((i for i, (_, code) in enumerate(labels) if code == "5-МН"), None)
-    if position is None:
-        raise RuntimeError("На странице ФНС не найдена строка формы 5-МН")
-    start = labels[position][0]
-    end = labels[position + 1][0] if position + 1 < len(labels) else len(federal)
-    row = federal[start:end]
+    row = form_row(federal, form)
+    if row is None:
+        raise RuntimeError(f"На странице ФНС не найдена строка формы {form}")
 
     found: dict[int, str] = {}
     for href, year in re.findall(r'href="([^"]+)"[^>]*>\s*(\d{4})\s*<', row):
@@ -351,33 +406,57 @@ def parse_year(blob: bytes, url: str) -> list[tuple[int, list, list]]:
     A year arrives either as an archive of one workbook per Раздел, or as a
     single workbook holding the three Разделы as separate sheets.
     """
-    out = []
+    merged: dict[int, dict] = {}
     problems = []
     for name, book in workbooks(blob, url):
         try:
             sheets = sheets_of(book)
         except (ValueError, RuntimeError, zipfile.BadZipFile) as error:
-            # One unreadable Раздел must not cost the other two: without xlrd
-            # the 2012-2014 archives still yield everything that is .xlsx.
+            # One unreadable Раздел must not cost the others: without xlrd the
+            # 2012-2014 archives still yield everything that is .xlsx.
             problems.append(f"{name}: {error}")
             continue
+        # 5-ТН and 5-НИО split one Раздел across a dozen sheets that repeat the
+        # same regions with different columns, so the member file names the
+        # section and every sheet inside it merges into that one section.
+        from_name = re.search(r"Раздел\s*([123])", name, re.I)
         for rows in sheets:
-            section = section_of(name, rows)
+            section = int(from_name.group(1)) if from_name else section_of(name, rows)
             if section is None:
                 continue
             try:
                 indicators, values = parse_sheet(rows, name)
             except ValueError:
                 continue
-            if values:
-                out.append((section, indicators, values))
+            if not values:
+                continue
+            slot = merged.setdefault(section, {'indicators': {}, 'values': [], 'title': ''})
+            for code, _position, label in indicators:
+                slot['indicators'].setdefault(code, label)
+            slot['values'].extend(values)
+            if not slot['title']:
+                slot['title'] = section_title(rows)
+    out = [(section, [(code, 0, label) for code, label in slot['indicators'].items()],
+            slot['values'], slot['title'])
+           for section, slot in sorted(merged.items())]
     if not out and problems:
         raise ValueError("; ".join(problems[:2]))
     return out, problems
 
 
-def update(years: list[int] | None = None, progress=print) -> int:
-    """Download and store 5-МН. Returns the number of stored figures."""
+def section_title(rows: list[dict[str, str]]) -> str:
+    """A readable heading for a section, taken from the sheet's own title rows."""
+    text = " ".join(v for cells in rows[:4] for v in cells.values())
+    text = " ".join(text.split())
+    found = re.search(r"(Отчет о налоговой базе[^.]{0,120})", text, re.I)
+    if found:
+        return found.group(1).strip(" .,")
+    found = re.search(r"РАЗДЕЛ\s+[IΙ]{1,3}\s*(.{0,110})", text, re.I)
+    return (found.group(1).strip(" .,") if found else text[:110]).strip()
+
+
+def update(years: list[int] | None = None, forms: list[str] | None = None, progress=print) -> int:
+    """Download and store the federal per-subject archives. Returns figure count."""
     import sqlite3  # noqa: PLC0415 - only the refresh path touches the index
 
     from . import store  # local import: statistics can be imported without an index
@@ -400,60 +479,95 @@ def update(years: list[int] | None = None, progress=print) -> int:
         ) from None
     lookup = region_lookup(names)
 
-    progress("Поиск файлов формы 5-МН на nalog.gov.ru…")
-    found_years = discover()
-    wanted = sorted(y for y in found_years if years is None or y in years)
-    progress(f"Найдено лет: {len(found_years)}, будет загружено: {len(wanted)}")
-
     all_values: list[tuple] = []
-    indicator_labels: dict[tuple[int, str], str] = {}
+    indicator_labels: dict[tuple[str, int, str], str] = {}
+    section_titles: dict[tuple[str, int], str] = {}
     stored = 0
     unmatched: set[str] = set()
-    for year in wanted:
-        url = found_years[year]
+
+    for form in (forms or list(FORMS)):
+        progress(f"\n=== {form} — {FORMS[form][0]} ===")
         try:
-            time.sleep(POLITE_DELAY)
-            blob = _fetch(url)
-        except (urllib.error.URLError, TimeoutError) as error:
-            progress(f"  {year}: не загрузилось ({error})")
+            found_years = discover(form)
+        except (RuntimeError, urllib.error.URLError, TimeoutError) as error:
+            progress(f"  не удалось получить список лет: {error}")
             continue
-        try:
-            parsed, problems = parse_year(blob, url)
-        except Exception as error:  # noqa: BLE001 - one bad year must not end the run
-            progress(f"  {year}: не разобрано — {error}")
-            continue
-        for problem in problems:
-            progress(f"  {year}: пропущен {problem}")
-        before = stored
-        for section, indicators, values in parsed:
-            for code, _position, label in indicators:
-                indicator_labels.setdefault((section, code), label)
-            rows = []
-            for subject, code, amount in values:
-                region = lookup.get(normalise(subject))
-                if region is None:
-                    unmatched.add(subject)
-                    continue
-                rows.append((year, section, region, code,
-                             "" if amount is None else
-                             int(amount) if float(amount).is_integer() else amount))
-            all_values.extend(rows)
-            stored += len(rows)
-        got = sorted({s for s, _, _ in parsed})
-        progress(f"  {year}: разделы {got or '—'}, показателей {stored - before:,}")
+        wanted = sorted(y for y in found_years if years is None or y in years)
+        progress(f"  лет доступно {len(found_years)}, будет загружено {len(wanted)}")
+
+        for year in wanted:
+            url = found_years[year]
+            try:
+                time.sleep(POLITE_DELAY)
+                blob = _fetch(url)
+            except (urllib.error.URLError, TimeoutError) as error:
+                progress(f"  {year}: не загрузилось ({error})")
+                continue
+            try:
+                parsed, problems = parse_year(blob, url)
+            except Exception as error:  # noqa: BLE001 - one bad year must not end the run
+                progress(f"  {year}: не разобрано — {error}")
+                continue
+            for problem in problems:
+                progress(f"  {year}: пропущен {problem}")
+            before = stored
+            for section, indicators, values, title in parsed:
+                for code, _position, label in indicators:
+                    indicator_labels.setdefault((form, section, code), label)
+                section_titles.setdefault(
+                    (form, section), KNOWN_TITLES.get((form, section)) or title)
+                rows = []
+                for subject, code, amount in values:
+                    region = lookup.get(normalise(subject))
+                    if region is None:
+                        unmatched.add(subject)
+                        continue
+                    rows.append((form, year, section, region, code,
+                                 "" if amount is None else
+                                 int(amount) if float(amount).is_integer() else amount))
+                all_values.extend(rows)
+                stored += len(rows)
+            got = sorted({s for s, _, _, _ in parsed})
+            progress(f"  {year}: разделы {got or '—'}, показателей {stored - before:,}")
 
     if not all_values:
         progress("Ничего не загружено — файлы оставлены без изменений.")
         return 0
-    all_values.sort(key=lambda row: (row[0], row[1], row[2], int(row[3])))
-    save(all_values, [(section, code, label)
-                      for (section, code), label in sorted(indicator_labels.items(),
-                                                           key=lambda kv: (kv[0][0], int(kv[0][1])))])
+    merge_and_save(all_values, indicator_labels, section_titles, progress)
     if unmatched:
         progress(f"Не сопоставлено с регионами: {', '.join(sorted(unmatched)[:8])}")
-    progress(f"Сохранено показателей: {stored:,} → {VALUES_FILE.name}, {INDICATORS_FILE.name}")
-    progress("Не забудьте закоммитить их, чтобы данные приехали всем по git pull.")
     return stored
+
+
+def merge_and_save(values, labels, titles, progress=print) -> None:
+    """Fold new figures into whatever is already shipped, then write the files."""
+    existing = {}
+    if VALUES_FILE.exists():
+        for row in _read(VALUES_FILE):
+            existing[(row["form"], int(row["year"]), int(row["section"]),
+                      row["region"], row["code"])] = row["amount"]
+    for form, year, section, region, code, amount in values:
+        existing[(form, year, section, region, code)] = amount
+
+    old_labels, old_titles = {}, {}
+    if INDICATORS_FILE.exists():
+        for row in _read(INDICATORS_FILE):
+            old_labels[(row["form"], int(row["section"]), row["code"])] = row["label"]
+    if SECTIONS_FILE.exists():
+        for row in _read(SECTIONS_FILE):
+            old_titles[(row["form"], int(row["section"]))] = row["title"]
+    old_labels.update(labels)
+    old_titles.update(titles)
+
+    save(
+        sorted(((f, y, s, r, c, a) for (f, y, s, r, c), a in existing.items()),
+               key=lambda row: (row[0], row[1], row[2], row[3], int(row[4]))),
+        sorted(((f, s, c, l) for (f, s, c), l in old_labels.items()),
+               key=lambda row: (row[0], row[1], int(row[2]))),
+        sorted(((f, s, t) for (f, s), t in old_titles.items())),
+    )
+    progress(f"Сохранено: {len(existing):,} показателей → {VALUES_FILE.name}")
+    progress("Не забудьте закоммитить их, чтобы данные приехали всем по git pull.")
 
 
 # ---------------------------------------------------------------- reading back
@@ -462,32 +576,47 @@ def available() -> bool:
     return VALUES_FILE.exists()
 
 
-def for_region(region: str, year: str | int | None) -> dict:
-    """Every figure for one subject, for the closest year at or before `year`."""
+def for_region(region: str, year: str | int | None, taxes: tuple[str, ...] = ()) -> dict:
+    """Figures for one subject, for the closest year at or before `year`.
+
+    `taxes` are the Nalog_ID values of the open document; when given, only the
+    forms that cover those taxes are returned, so a transport-tax document does
+    not get three sections about land tax.
+    """
     table = load()
     by_year = table["values"].get(region, {})
     years = sorted(by_year)
     if not years:
-        return {'years': [], 'year': None, 'sections': []}
+        return {'years': [], 'year': None, 'forms': []}
     try:
         wanted = int(year)
     except (TypeError, ValueError):
         wanted = years[-1]
     chosen = max((y for y in years if y <= wanted), default=years[0])
 
-    labels = table["labels"]
-    sections = []
-    for number in sorted(SECTIONS):
-        rows = by_year[chosen].get(number)
-        if not rows:
+    labels, titles = table["labels"], table["titles"]
+    forms = []
+    for code, (name, covers) in FORMS.items():
+        if taxes and not set(taxes) & set(covers):
             continue
-        items = []
-        for code, amount in sorted(rows, key=lambda row: int(row[0])):
-            label = labels.get((number, code), code)
-            items.append({'code': code, 'label': tidy_label(label),
-                          'headline': bool(HEADLINE.match(label)), 'amount': amount})
-        sections.append({'section': number, 'title': SECTIONS[number], 'items': items})
-    return {'years': years, 'year': chosen, 'sections': sections}
+        sections = []
+        for number, rows in sorted(by_year[chosen].get(code, {}).items()):
+            items = []
+            for indicator, amount in sorted(rows, key=lambda row: int(row[0])):
+                label = labels.get((code, number, indicator), indicator)
+                clean = tidy_label(label)
+                # A breakdown row inherits its parent's numbering through the
+                # joined hierarchy, so the separator is what tells them apart.
+                items.append({'code': indicator, 'label': clean,
+                              'headline': bool(HEADLINE.match(clean)) and ' · ' not in clean,
+                              'amount': amount})
+            sections.append({'section': number,
+                             'title': (KNOWN_TITLES.get((code, number))
+                                       or titles.get((code, number)) or f'Раздел {number}'),
+                             'items': items})
+        if sections:
+            forms.append({'form': code, 'name': name, 'sections': sections})
+    return {'years': years, 'year': chosen, 'forms': forms}
 
 
 # The form numbers its own top-level rows ("1.Количество налогоплательщиков",
