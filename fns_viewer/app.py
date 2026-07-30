@@ -29,16 +29,6 @@ def connection() -> sqlite3.Connection:
     return con
 
 
-def stats_connection() -> sqlite3.Connection | None:
-    """The statistics file is optional — the viewer works fine without it."""
-    if not statistics.available():
-        return None
-    con = getattr(_local, 'stats', None)
-    if con is None:
-        con = _local.stats = statistics.connect(readonly=True)
-    return con
-
-
 def json_response(payload, status: int = 200) -> Response:
     raw = json.dumps(payload, ensure_ascii=False).encode()
     return status, {'Content-Type': 'application/json; charset=utf-8'}, raw
@@ -76,13 +66,12 @@ def handle(path: str, params: dict[str, list[str]]) -> Response:
         if path == '/api/options':
             return json_response(store.options(con))
         if path == '/api/statistics':
-            stats = stats_connection()
-            if stats is None:
+            if not statistics.available():
                 return json_response({'available': False})
             region = params.get('region', [''])[0].strip()
             if not region:
                 return json_response({'error': 'Не указан регион'}, 400)
-            payload = statistics.for_region(stats, region, params.get('period', [''])[0])
+            payload = statistics.for_region(region, params.get('period', [''])[0])
             payload['available'] = True
             payload['form'] = '5-МН'
             return json_response(payload)

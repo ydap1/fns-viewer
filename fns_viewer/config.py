@@ -13,9 +13,6 @@ PACKAGE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("FNS_VIEWER_HOME") or PACKAGE.parent)
 XML = Path(os.environ.get("FNS_VIEWER_XML") or ROOT / "data.xml")
 DB = Path(os.environ.get("FNS_VIEWER_DB") or ROOT / "tax_viewer_index.sqlite3")
-# Statistics live in their own file: they are downloaded from nalog.gov.ru, not
-# derived from data.xml, so rebuilding the XML index must not wipe them.
-STATS_DB = Path(os.environ.get("FNS_VIEWER_STATS_DB") or ROOT / "tax_viewer_stats.sqlite3")
 STATIC = PACKAGE / "static"
 
 PAGE_SIZE = 50

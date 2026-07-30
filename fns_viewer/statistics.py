@@ -16,9 +16,10 @@ about fifteen downloads rather than one per region.
 """
 from __future__ import annotations
 
+import csv
+import gzip
 import io
 import re
-import sqlite3
 import time
 import urllib.error
 import urllib.parse
@@ -26,7 +27,15 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
-from .config import STATS_DB
+from .config import PACKAGE
+
+# Committed to the repository rather than downloaded by each user: it is 1.1 MB
+# gzipped, and shipping it means `git pull` delivers the statistics the same way
+# it delivers the code — no import step, no network, no pip install. Only
+# whoever refreshes it for a new year needs xlrd and a built XML index.
+DATA = PACKAGE / "data"
+VALUES_FILE = DATA / "5mn-values.csv.gz"
+INDICATORS_FILE = DATA / "5mn-indicators.csv.gz"
 
 FORMS_URL = "https://www.nalog.gov.ru/rn77/related_activities/statistics_and_analytics/forms/"
 USER_AGENT = "fns-viewer/2.1 (local tax rate viewer; +https://github.com/ydap1/fns-viewer)"
@@ -54,29 +63,49 @@ ALIASES = {
     "ханты мансийский югра": "86",
 }
 
-SCHEMA = """
-  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS indicator (
-    section INTEGER NOT NULL, code TEXT NOT NULL, position INTEGER NOT NULL,
-    label TEXT NOT NULL, PRIMARY KEY (section, code)
-  );
-  CREATE TABLE IF NOT EXISTS value (
-    year INTEGER NOT NULL, section INTEGER NOT NULL, region TEXT NOT NULL,
-    code TEXT NOT NULL, amount REAL,
-    PRIMARY KEY (year, section, region, code)
-  );
-  CREATE INDEX IF NOT EXISTS value_lookup ON value(region, year, section);
-"""
+_loaded: dict | None = None
 
 
-def connect(readonly: bool = False) -> sqlite3.Connection:
-    if readonly:
-        con = sqlite3.connect(f"file:{STATS_DB}?mode=ro", uri=True, check_same_thread=False)
-    else:
-        con = sqlite3.connect(STATS_DB)
-        con.executescript(SCHEMA)
-    con.row_factory = sqlite3.Row
-    return con
+def _read(path):
+    with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
+        yield from csv.DictReader(handle)
+
+
+def load() -> dict:
+    """Read the shipped tables into memory once. 249k rows is about 30 MB."""
+    global _loaded
+    if _loaded is not None:
+        return _loaded
+    values: dict[str, dict[int, dict[int, list]]] = {}
+    labels: dict[tuple[int, str], str] = {}
+    if VALUES_FILE.exists():
+        for row in _read(VALUES_FILE):
+            amount = row["amount"]
+            (values.setdefault(row["region"], {})
+                   .setdefault(int(row["year"]), {})
+                   .setdefault(int(row["section"]), [])
+                   .append((row["code"], float(amount) if amount != "" else None)))
+    if INDICATORS_FILE.exists():
+        for row in _read(INDICATORS_FILE):
+            labels[(int(row["section"]), row["code"])] = row["label"]
+    _loaded = {"values": values, "labels": labels}
+    return _loaded
+
+
+def save(values, indicators) -> None:
+    """Write the two shipped tables. Only the refresh path calls this."""
+    DATA.mkdir(exist_ok=True)
+
+    def write(path, header, rows):
+        # mtime=0 keeps the gzip byte-identical when the data has not changed,
+        # so an unchanged refresh does not show up as a diff.
+        with gzip.GzipFile(path, "wb", compresslevel=9, mtime=0) as raw:
+            writer = csv.writer(io.TextIOWrapper(raw, "utf-8", newline=""))
+            writer.writerow(header)
+            writer.writerows(rows)
+
+    write(VALUES_FILE, ["year", "section", "region", "code", "amount"], values)
+    write(INDICATORS_FILE, ["section", "code", "label"], indicators)
 
 
 def normalise(name: str) -> str:
@@ -349,26 +378,39 @@ def parse_year(blob: bytes, url: str) -> list[tuple[int, list, list]]:
 
 def update(years: list[int] | None = None, progress=print) -> int:
     """Download and store 5-МН. Returns the number of stored figures."""
-    from . import store  # local import: statistics can be imported without an index
+    import sqlite3  # noqa: PLC0415 - only the refresh path touches the index
 
-    with store.connect(readonly=True) as index:
-        names = {}
-        for row in index.execute("SELECT value FROM list_values"):
-            found = re.match(r"^(\d\d)\s*-\s*(.+)$", row[0])
-            if found:
-                names[found.group(1)] = found.group(2).strip()
+    from . import store  # local import: statistics can be imported without an index
+    from .config import DB
+
+    # The subject names come from data.xml's own classifier, so the index has to
+    # exist. Users never hit this: they get the finished tables from git.
+    try:
+        with store.connect(readonly=True) as index:
+            names = {}
+            for row in index.execute("SELECT value FROM list_values"):
+                found = re.match(r"^(\d\d)\s*-\s*(.+)$", row[0])
+                if found:
+                    names[found.group(1)] = found.group(2).strip()
+    except sqlite3.Error:
+        raise SystemExit(
+            f"Для обновления статистики нужен индекс {DB}: он даёт названия регионов.\n"
+            "Положите data.xml рядом с viewer.py и запустите его один раз, "
+            "затем повторите обновление."
+        ) from None
     lookup = region_lookup(names)
 
     progress("Поиск файлов формы 5-МН на nalog.gov.ru…")
-    available = discover()
-    wanted = sorted(y for y in available if years is None or y in years)
-    progress(f"Найдено лет: {len(available)}, будет загружено: {len(wanted)}")
+    found_years = discover()
+    wanted = sorted(y for y in found_years if years is None or y in years)
+    progress(f"Найдено лет: {len(found_years)}, будет загружено: {len(wanted)}")
 
-    con = connect()
+    all_values: list[tuple] = []
+    indicator_labels: dict[tuple[int, str], str] = {}
     stored = 0
     unmatched: set[str] = set()
     for year in wanted:
-        url = available[year]
+        url = found_years[year]
         try:
             time.sleep(POLITE_DELAY)
             blob = _fetch(url)
@@ -384,43 +426,47 @@ def update(years: list[int] | None = None, progress=print) -> int:
             progress(f"  {year}: пропущен {problem}")
         before = stored
         for section, indicators, values in parsed:
-            con.executemany(
-                "INSERT OR REPLACE INTO indicator VALUES (?, ?, ?, ?)",
-                [(section, code, position, label) for code, position, label in indicators])
+            for code, _position, label in indicators:
+                indicator_labels.setdefault((section, code), label)
             rows = []
             for subject, code, amount in values:
                 region = lookup.get(normalise(subject))
                 if region is None:
                     unmatched.add(subject)
                     continue
-                rows.append((year, section, region, code, amount))
-            con.executemany("INSERT OR REPLACE INTO value VALUES (?, ?, ?, ?, ?)", rows)
+                rows.append((year, section, region, code,
+                             "" if amount is None else
+                             int(amount) if float(amount).is_integer() else amount))
+            all_values.extend(rows)
             stored += len(rows)
-        con.commit()
         got = sorted({s for s, _, _ in parsed})
         progress(f"  {year}: разделы {got or '—'}, показателей {stored - before:,}")
 
-    con.execute("INSERT OR REPLACE INTO meta VALUES ('updated', ?)",
-                (time.strftime("%Y-%m-%d %H:%M"),))
-    con.execute("INSERT OR REPLACE INTO meta VALUES ('form', '5-МН')")
-    con.commit()
-    con.close()
+    if not all_values:
+        progress("Ничего не загружено — файлы оставлены без изменений.")
+        return 0
+    all_values.sort(key=lambda row: (row[0], row[1], row[2], int(row[3])))
+    save(all_values, [(section, code, label)
+                      for (section, code), label in sorted(indicator_labels.items(),
+                                                           key=lambda kv: (kv[0][0], int(kv[0][1])))])
     if unmatched:
         progress(f"Не сопоставлено с регионами: {', '.join(sorted(unmatched)[:8])}")
-    progress(f"Сохранено показателей: {stored:,}")
+    progress(f"Сохранено показателей: {stored:,} → {VALUES_FILE.name}, {INDICATORS_FILE.name}")
+    progress("Не забудьте закоммитить их, чтобы данные приехали всем по git pull.")
     return stored
 
 
 # ---------------------------------------------------------------- reading back
 
 def available() -> bool:
-    return STATS_DB.exists()
+    return VALUES_FILE.exists()
 
 
-def for_region(con: sqlite3.Connection, region: str, year: str | int | None) -> dict:
-    """Every stored figure for one subject, for the closest year at or before `year`."""
-    years = [r[0] for r in con.execute(
-        "SELECT DISTINCT year FROM value WHERE region=? ORDER BY year", (region,))]
+def for_region(region: str, year: str | int | None) -> dict:
+    """Every figure for one subject, for the closest year at or before `year`."""
+    table = load()
+    by_year = table["values"].get(region, {})
+    years = sorted(by_year)
     if not years:
         return {'years': [], 'year': None, 'sections': []}
     try:
@@ -429,20 +475,17 @@ def for_region(con: sqlite3.Connection, region: str, year: str | int | None) -> 
         wanted = years[-1]
     chosen = max((y for y in years if y <= wanted), default=years[0])
 
-    labels = {(r['section'], r['code']): r['label']
-              for r in con.execute("SELECT section, code, label FROM indicator")}
+    labels = table["labels"]
     sections = []
     for number in sorted(SECTIONS):
-        rows = con.execute(
-            "SELECT code, amount FROM value WHERE region=? AND year=? AND section=?"
-            " ORDER BY CAST(code AS INTEGER)", (region, chosen, number)).fetchall()
+        rows = by_year[chosen].get(number)
         if not rows:
             continue
         items = []
-        for row in rows:
-            label = labels.get((number, row['code']), row['code'])
-            items.append({'code': row['code'], 'label': tidy_label(label),
-                          'headline': bool(HEADLINE.match(label)), 'amount': row['amount']})
+        for code, amount in sorted(rows, key=lambda row: int(row[0])):
+            label = labels.get((number, code), code)
+            items.append({'code': code, 'label': tidy_label(label),
+                          'headline': bool(HEADLINE.match(label)), 'amount': amount})
         sections.append({'section': number, 'title': SECTIONS[number], 'items': items})
     return {'years': years, 'year': chosen, 'sections': sections}
 
