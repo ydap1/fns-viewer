@@ -1,0 +1,450 @@
+/* Налоговые ставки и льготы — offline stylesheet.
+   No web fonts, no CDN: the program is handed over as a folder and has to look
+   the same on a machine that has never been online. Everything below therefore
+   builds on the system UI stack and on tabular numerals, which is what this
+   data actually needs. */
+
+:root {
+  color-scheme: light dark;
+
+  --paper: #f4f3ef;
+  --surface: #ffffff;
+  --surface-2: #faf9f6;
+  --ink: #15181c;
+  --ink-2: #59616b;
+  --ink-3: #656b75;  /* clears 4.5:1 on paper and on --surface-2 */
+  --rule: #e2e0da;
+  --rule-strong: #c8c6be;
+
+  --accent: #1d4e89;          /* stamp blue: links and primary actions */
+  --accent-ink: #143661;
+  --accent-soft: #e7edf5;
+  --mode: #8c3a1e;            /* oxide: reserved for the payer-category switch */
+  --mode-soft: #f7ebe5;
+  /* Text laid on a filled accent. Light theme fills dark, dark theme fills
+     light, so this has to flip or the filled controls lose their contrast. */
+  --on-accent: #ffffff;
+  --flag: #1f5c2c;
+  --flag-soft: #e3efe4;
+
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+
+  --r: 7px;
+  --shadow: 0 1px 2px rgb(21 24 28 / .06), 0 8px 24px -12px rgb(21 24 28 / .18);
+  --wrap: 1400px;
+  --z-bar: 20;
+  --z-head: 30;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #14161a;
+    --surface: #1b1e23;
+    --surface-2: #21252b;
+    --ink: #e9e9e6;
+    --ink-2: #a8afb8;
+    --ink-3: #8d949d;
+    --rule: #2e333a;
+    --rule-strong: #434a53;
+    --accent: #7aa9de;
+    --accent-ink: #a8c8ec;
+    --accent-soft: #1e2c3d;
+    --mode: #e0906f;
+    --mode-soft: #33231c;
+    --on-accent: #14161a;
+    --flag: #8fc79b;
+    --flag-soft: #1c2b1f;
+    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .7);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.55 var(--ui);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.25; }
+
+a { color: var(--accent); text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+a:hover { text-decoration-color: currentColor; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 20px; }
+
+.skip {
+  position: absolute; left: -9999px;
+  background: var(--surface); padding: 10px 14px; border-radius: var(--r); z-index: 99;
+}
+.skip:focus { left: 20px; top: 12px; }
+
+/* ---------- masthead ---------- */
+
+.masthead {
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+}
+.masthead-inner { display: flex; align-items: center; gap: 16px; min-height: 62px; }
+
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark {
+  display: grid; place-items: center;
+  width: 34px; height: 34px; flex: none;
+  border-radius: 6px;
+  background: var(--accent); color: var(--on-accent);
+  font: 600 13px/1 var(--mono); letter-spacing: .04em;
+}
+.brand-text { display: flex; flex-direction: column; }
+.brand-text b { font-size: 15px; font-weight: 600; }
+.brand-text small { color: var(--ink-3); font-size: 12.5px; }
+
+/* ---------- filters ---------- */
+
+.filters {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  padding: 16px 0 14px;
+}
+.field { display: flex; flex-direction: column; gap: 5px; position: relative; min-width: 0; }
+.field-grow { flex: 1 1 320px; }
+.field-narrow { flex: 0 0 130px; }
+.field label {
+  font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  /* Sits on --paper, where --ink-3 lands at 4.25:1; this clears AA. */
+  color: var(--ink-2);
+}
+
+input, select, .button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
+  padding: 9px 11px;
+  min-height: 40px;
+}
+input:hover, select:hover { border-color: var(--ink-3); }
+select { cursor: pointer; min-width: 150px; }
+input[type=search] { width: 100%; }
+input[type=search]::-webkit-search-cancel-button { cursor: pointer; }
+
+.hint {
+  position: absolute; right: 10px; bottom: 11px;
+  font: 11px/1 var(--mono); color: var(--ink-3);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 3px 5px;
+  pointer-events: none;
+}
+.field-grow:focus-within .hint { opacity: 0; }
+
+.button {
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.button:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); }
+.button:disabled { opacity: .45; cursor: not-allowed; }
+.button-quiet { padding: 9px 12px; font-family: var(--mono); }
+.button-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.button-primary:hover:not(:disabled) { background: var(--accent-ink); border-color: var(--accent-ink); color: var(--on-accent); }
+
+/* ---------- active filter chips ---------- */
+
+.active-filters { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 14px; }
+/* The whole chip removes the filter: it is the only thing a chip does, and a
+   bare × is a 20px target. */
+.pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--accent-soft); color: var(--accent-ink);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: 99px; padding: 5px 12px; min-height: 34px;
+  font: 13px/1.4 var(--ui); cursor: pointer;
+  max-width: 340px;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill i { font-style: normal; font-size: 15px; line-height: 1; opacity: .7; }
+.pill:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); }
+.pill:hover i { opacity: 1; }
+
+/* ---------- results bar ---------- */
+
+/* Deliberately not sticky: the column headers below are, and two overlapping
+   sticky bars cannot both stay honest about their heights. */
+.results-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.results-bar + .results-bar { border-bottom: 0; border-top: 1px solid var(--rule); }
+.summary { margin: 0; color: var(--ink-2); font-size: 14px; }
+.summary b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.results-actions { display: flex; align-items: center; gap: 10px; }
+.pager { display: flex; align-items: center; gap: 6px; }
+.pageinfo {
+  font: 13px/1 var(--mono); color: var(--ink-2);
+  min-width: 82px; text-align: center;
+}
+
+/* ---------- results table ---------- */
+
+.table-scroll { overflow-x: auto; margin: 14px 0 40px; }
+
+table { border-collapse: collapse; width: 100%; background: var(--surface); }
+
+.results { border: 1px solid var(--rule); border-radius: var(--r); }
+.results th, .results td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); }
+.results thead th {
+  position: sticky; top: 0; z-index: var(--z-bar);
+  background: var(--surface-2);
+  padding: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  /* A sticky cell drops its own borders once it detaches, so draw one that stays. */
+  box-shadow: inset 0 -1px 0 var(--rule-strong);
+}
+.results tbody tr { cursor: pointer; }
+.results tbody tr:hover { background: var(--surface-2); }
+.results tbody tr:last-child td { border-bottom: 0; }
+.results td { vertical-align: top; }
+
+.col-period { width: 92px; }
+.col-region { width: 210px; }
+.col-tax { width: 210px; }
+.col-law { width: 34%; }
+
+.sort {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 11px 14px; min-height: 44px;
+  background: none; border: 0; border-radius: 0;
+  font: 600 12px/1.3 var(--ui); letter-spacing: .04em; text-transform: uppercase;
+  color: var(--ink-2); text-align: left; cursor: pointer;
+}
+.sort:hover { color: var(--accent-ink); background: var(--accent-soft); }
+.sort::after { content: ""; font: 10px/1 var(--mono); color: var(--accent); }
+.sort[data-dir=asc]::after { content: "▲"; }
+.sort[data-dir=desc]::after { content: "▼"; }
+
+.cell-period { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.cell-name { font-weight: 500; }
+.cell-name a { text-decoration: none; }
+.results tbody tr:hover .cell-name a { text-decoration: underline; }
+.cell-law { color: var(--ink-2); font-size: 14px; }
+.muted { color: var(--ink-3); }
+
+/* Region codes are part of the official name; setting them as codes makes the
+   column scannable instead of 50 lines that all start with two digits. */
+.rcode {
+  font: 12px/1.5 var(--mono); color: var(--ink-3);
+  background: var(--surface-2); border: 1px solid var(--rule);
+  border-radius: 4px; padding: 0 5px; margin-right: 6px;
+}
+/* Titles run to 300+ characters; three lines keeps rows comparable at a glance. */
+.clip {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  line-clamp: 3; overflow: hidden;
+}
+
+/* ---------- states ---------- */
+
+.state { padding: 48px 20px; text-align: center; color: var(--ink-2); }
+.state h3 { font-size: 16px; margin-bottom: 6px; color: var(--ink); }
+.state p { margin: 0 auto; max-width: 46ch; font-size: 14px; }
+
+.skeleton td { padding: 11px 14px; }
+.skeleton i {
+  display: block; height: 12px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--rule) 25%, var(--surface-2) 50%, var(--rule) 75%);
+  background-size: 300% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+@keyframes shimmer { to { background-position: -300% 0; } }
+
+.error {
+  margin: 14px 0; padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--mode) 35%, transparent);
+  background: var(--mode-soft); color: var(--mode);
+  border-radius: var(--r); font-size: 14px;
+}
+
+/* ---------- document view ---------- */
+
+.back {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin: 18px 0 14px; padding: 0; min-height: 32px;
+  background: none; border: 0; color: var(--accent); font: inherit; cursor: pointer;
+}
+.back:hover { text-decoration: underline; }
+
+.citation {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r);
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+}
+.citation h1 { font-size: 21px; line-height: 1.3; max-width: 68ch; }
+.citation .place {
+  margin: 0 0 10px; font-size: 13px; font-weight: 600;
+  letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3);
+}
+.citation .meta {
+  display: flex; flex-wrap: wrap; gap: 6px 20px;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rule);
+  font-size: 13.5px; color: var(--ink-2);
+}
+.citation .meta b { color: var(--ink); font-weight: 500; }
+.codes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.code {
+  display: inline-flex; align-items: baseline; gap: 7px;
+  border: 1px solid var(--rule); border-radius: 5px;
+  padding: 4px 9px; background: var(--surface-2);
+  font: 13px/1.4 var(--mono);
+}
+.code i { font-style: normal; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+
+/* payer switch — the one place the oxide accent is used */
+.payers { margin: 26px 0 0; }
+.payers > b {
+  display: block; margin-bottom: 8px;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2);
+}
+.segments { display: flex; flex-wrap: wrap; gap: 8px; }
+.segment {
+  flex: 0 1 auto; text-align: left; cursor: pointer;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--rule-strong); border-radius: var(--r);
+  padding: 8px 14px; min-height: 44px;
+  font: inherit; line-height: 1.3;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.segment small { display: block; font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.segment:hover { border-color: var(--mode); }
+.segment[aria-pressed=true] { background: var(--mode); border-color: var(--mode); color: var(--on-accent); }
+/* Mixed toward the fill rather than toward transparent: an opaque colour keeps
+   the contrast ratio checkable instead of depending on what sits behind it. */
+.segment[aria-pressed=true] small { color: color-mix(in srgb, var(--on-accent) 80%, var(--mode)); }
+
+.section-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap;
+  margin: 34px 0 10px;
+}
+.section-head h2 { font-size: 17px; }
+.section-head .count { color: var(--ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
+.section-head label { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
+.section-head select { min-height: 34px; padding: 5px 9px; font-size: 13.5px; min-width: 0; }
+
+.data { border: 1px solid var(--rule); border-radius: var(--r); }
+.data th, .data td { padding: 10px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+.data thead th {
+  font: 600 11.5px/1.3 var(--ui); letter-spacing: .05em; text-transform: uppercase;
+  color: var(--ink-3); background: var(--surface-2);
+  border-bottom: 1px solid var(--rule-strong);
+  white-space: nowrap;
+}
+.data tbody tr:last-child td { border-bottom: 0; }
+.data td { overflow-wrap: break-word; }
+
+.group td { background: var(--surface-2); padding: 9px 14px; }
+.group-row { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.group-row b { font-weight: 600; font-size: 14.5px; }
+/* margin-left keeps the tally on the right even when a long object name pushes
+   it onto its own line. */
+.group-row small {
+  margin-left: auto; color: var(--ink-2); font-size: 12.5px;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+
+/* The figure people came for. Selectors are qualified with `.data td/th`
+   because the generic cell rule below them also sets text-align. */
+.data td.rate {
+  font: 600 19px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right; white-space: nowrap;
+}
+.data td.amount { font: 600 15px/1.3 var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.data td.amount i { font-style: normal; font-family: var(--ui); font-weight: 400; font-size: 12.5px; color: var(--ink-3); }
+.data th.num, .data td.num { text-align: right; }
+
+.tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.tag {
+  border-radius: 4px; padding: 2px 6px;
+  background: var(--flag-soft); color: var(--flag);
+  font: 600 11px/1.5 var(--ui); letter-spacing: .03em;
+}
+.ident { font: 12px/1.4 var(--mono); color: var(--ink-3); }
+
+/* Conditions of relief run to whole paragraphs of statute. Cutting them off
+   mid-line inside a scroll box just looks broken, so clamp and say so. */
+.clamp .text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+  line-clamp: 4; overflow: hidden;
+}
+.clamp.open .text { display: block; }
+.more {
+  margin-top: 4px; padding: 2px 0; min-height: 24px;
+  background: none; border: 0; color: var(--accent);
+  font: 500 13px/1.4 var(--ui); cursor: pointer;
+}
+.more:hover { text-decoration: underline; }
+
+.note {
+  margin: 0; padding: 12px 14px;
+  border: 1px solid var(--rule); border-left: 3px solid var(--ink-3);
+  border-radius: var(--r); background: var(--surface);
+  color: var(--ink-2); font-size: 14px;
+}
+
+.doc-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 22px 0 0; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 900px) {
+  .wrap { padding: 0 14px; }
+  .field-grow, .field { flex: 1 1 100%; }
+  .field-narrow { flex: 1 1 100%; }
+  select { width: 100%; }
+  .results thead th { top: 0; }
+  .results-bar { position: static; }
+  .col-region, .col-tax, .col-law { width: auto; }
+  .citation { padding: 16px; }
+  .citation h1 { font-size: 18px; }
+}
+
+@media (max-width: 620px) {
+  /* Drop the tax and document columns by position: hiding a <col> does nothing
+     to its cells, and the header cells carry no class of their own. */
+  .results tr > :nth-child(3), .results tr > :nth-child(5) { display: none; }
+  .results th, .results td { padding: 10px 8px; }
+  .col-period { width: 58px; }
+  .cell-period { font-size: 13px; }
+  .results-bar { gap: 10px; }
+  .results-actions { width: 100%; justify-content: space-between; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+/* ---------- print: a document should print like a document ---------- */
+
+@media print {
+  :root { --paper: #fff; --surface: #fff; --surface-2: #fff; }
+  body { font-size: 11pt; }
+  .masthead, .filters, .results-bar, .active-filters, .back, .doc-actions, .payers, .skip { display: none !important; }
+  .citation { box-shadow: none; border-left-width: 2px; }
+  .data { page-break-inside: auto; }
+  .data tr { page-break-inside: avoid; }
+  .section-head { page-break-after: avoid; }
+}

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Налоговые ставки и льготы — локальный просмотрщик</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231d4e89'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='15' font-weight='bold' fill='white' text-anchor='middle'%3E%D0%9D%D0%A1%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#main">Перейти к результатам</a>
+
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">НС</span>
+      <span class="brand-text">
+        <b>Налоговые ставки и льготы</b>
+        <small id="corpus">Локальный просмотрщик · только чтение</small>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+
+  <section id="view-search" class="view">
+    <form id="filters" class="filters" role="search">
+      <div class="field field-grow">
+        <label for="q">Поиск</label>
+        <input id="q" name="q" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Муниципальное образование, закон или код ИФНС">
+        <kbd class="hint">/</kbd>
+      </div>
+      <div class="field">
+        <label for="region">Регион</label>
+        <select id="region" name="region"><option value="">Все регионы</option></select>
+      </div>
+      <div class="field">
+        <label for="tax">Налог</label>
+        <select id="tax" name="tax"><option value="">Все налоги</option></select>
+      </div>
+      <div class="field field-narrow">
+        <label for="period">Период</label>
+        <select id="period" name="period"><option value="">Все периоды</option></select>
+      </div>
+    </form>
+
+    <div id="active" class="active-filters" hidden></div>
+
+    <div class="results-bar">
+      <p id="summary" class="summary" role="status" aria-live="polite">Загрузка…</p>
+      <div class="results-actions">
+        <button type="button" id="export" class="button">Скачать Excel</button>
+        <nav class="pager" aria-label="Страницы результатов">
+          <button type="button" id="prev" class="button button-quiet" aria-label="Предыдущая страница">←</button>
+          <span id="pageinfo" class="pageinfo">—</span>
+          <button type="button" id="next" class="button button-quiet" aria-label="Следующая страница">→</button>
+        </nav>
+      </div>
+    </div>
+
+    <div class="table-scroll">
+      <table class="results">
+        <colgroup>
+          <col class="col-period"><col class="col-region"><col class="col-tax"><col><col class="col-law">
+        </colgroup>
+        <thead>
+          <tr>
+            <th><button type="button" class="sort" data-sort="period">Период</button></th>
+            <th><button type="button" class="sort" data-sort="region">Регион</button></th>
+            <th><button type="button" class="sort" data-sort="tax">Налог</button></th>
+            <th><button type="button" class="sort" data-sort="municipality">Муниципальное образование</button></th>
+            <th><button type="button" class="sort" data-sort="law">Документ</button></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div class="results-bar" id="footbar" hidden>
+      <p class="summary" id="summary-foot"></p>
+      <nav class="pager" aria-label="Страницы результатов">
+        <button type="button" id="prev-foot" class="button button-quiet" aria-label="Предыдущая страница">←</button>
+        <span id="pageinfo-foot" class="pageinfo">—</span>
+        <button type="button" id="next-foot" class="button button-quiet" aria-label="Следующая страница">→</button>
+      </nav>
+    </div>
+  </section>
+
+  <section id="view-doc" class="view" hidden></section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
