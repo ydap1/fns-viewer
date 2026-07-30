@@ -4,7 +4,7 @@
 # The whole script is one function called on the last line: the shell parses a
 # function completely before running it, so `git pull` replacing this file
 # mid-run cannot make it resume at a stale byte offset. `$0` rather than
-# BASH_SOURCE, and no `pipefail`, so it still behaves if run as `sh launch.sh`.
+# BASH_SOURCE, and no `pipefail`, so it still behaves under `sh linux_launch.sh`.
 set -u
 
 main() {
