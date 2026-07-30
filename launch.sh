@@ -10,10 +10,20 @@ set -u
 main() {
   cd "$(dirname "$0")" || exit 1
 
+  case "$(uname -s)" in
+    Darwin) os=macos ;;
+    Linux)  os=linux ;;
+    *)      os=other ;;
+  esac
+
   if ! command -v git >/dev/null 2>&1; then
     printf '\n[!] Git is not installed, so this copy cannot receive updates.\n'
-    printf '    Linux: install git with your package manager.\n'
-    printf '    macOS: run `xcode-select --install`, or install from https://git-scm.com\n\n'
+    case "$os" in
+      macos) printf '    Run: xcode-select --install\n' ;;
+      linux) printf '    Install git with your package manager, e.g. apt install git\n' ;;
+      *)     printf '    Install git from https://git-scm.com\n' ;;
+    esac
+    printf '\n'
   elif [ ! -d .git ]; then
     printf '\n[!] This folder is not a Git clone, so it will never update.\n'
     printf '    Replace it with:\n'
@@ -34,7 +44,13 @@ main() {
   fi
 
   python=$(command -v python3 || command -v python) || {
-    printf '\n[!] Python 3 not found. Install it and run this file again.\n\n'
+    printf '\n[!] Python 3 not found.\n'
+    case "$os" in
+      macos) printf '    Install it from https://python.org or with: brew install python\n' ;;
+      linux) printf '    Install it with your package manager, e.g. apt install python3\n' ;;
+      *)     printf '    Install Python 3 and run this file again.\n' ;;
+    esac
+    printf '\n'
     exit 1
   }
   exec "$python" viewer.py --open-browser
